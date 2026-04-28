@@ -1,0 +1,74 @@
+# 角色话题可见策略（可直接编辑）
+
+说明：
+- 你可以直接修改本文件中的话题列表。
+- 每行一个话题，保持英文 topic 名称。
+- `engineer` 支持写 `*`，表示显示全部已解析话题。
+- 带 `_0/_1` 的是实例化话题（multi_id）。
+
+========================================
+[customer]
+actuator_outputs
+battery_status
+input_rc
+vehicle_status_0
+vehicle_local_position
+vehicle_local_position_setpoint
+sensor_combined
+vehicle_visual_odometry
+
+
+========================================
+[aftersales]
+actuator_outputs
+battery_status
+input_rc
+vehicle_status_0
+vehicle_local_position
+vehicle_local_position_setpoint
+sensor_combined
+vehicle_visual_odometry
+sensor_accel_0
+sensor_gyro_0
+sensor_baro_0
+vehicle_attitude
+vehicle_attitude_setpoint
+
+========================================
+[engineer]
+*
+
+========================================
+# 可选：当前解析器会自动尝试的常见话题（供参考）
+actuator_outputs
+battery_status
+input_rc
+vehicle_status_0
+vehicle_local_position
+vehicle_local_position_setpoint
+sensor_combined
+vehicle_visual_odometry
+sensor_accel_0
+sensor_gyro_0
+sensor_baro_0
+vehicle_attitude
+vehicle_attitude_setpoint
+actuator_motors
+cpuload
+estimator_event_flags
+estimator_innovation_test_ratios
+estimator_innovations
+estimator_local_position
+estimator_selector_status
+estimator_states
+estimator_status_flags
+failsafe_flags
+home_position
+manual_control_setpoint
+manual_control_switches
+rtl_status
+sensors_status_imu
+telemetry_status
+vehicle_acceleration
+vehicle_command
+trajectory_setpoint
