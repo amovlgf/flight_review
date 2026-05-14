@@ -65,7 +65,7 @@ export function getPx4ParamsExportHint(
   const review = input.review
 
   if (!proposal) {
-    return '请先生成候选参数'
+    return '请先生成候选参数。'
   }
   if (proposal.status === 'rejected') {
     return '当前候选参数已被拒绝，不能导出 PX4 参数文件。'

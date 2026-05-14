@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import ChartPanel from './components/ChartPanel'
 import type {
@@ -13,6 +13,7 @@ import LogSelector from './components/LogSelector'
 import TuningPanel from './components/TuningPanel'
 import UploadPanel from './components/UploadPanel'
 import { fetchChartData, fetchLogList, uploadLogFile } from './services/api'
+import type { TuningSegmentState } from './types/tuning'
 
 type ChartAction = {
   type: string
@@ -32,6 +33,7 @@ type ChartInstance = {
   dispatchAction: (action: ChartAction) => void
   on: (eventName: 'datazoom', handler: () => void) => void
   off: (eventName: 'datazoom', handler: () => void) => void
+  isDisposed?: () => boolean
 }
 
 type ChartRegistryItem = {
@@ -42,11 +44,40 @@ type ChartRegistryItem = {
 type ViewMode = 'upload' | 'chart'
 
 const PAGE_SIZE = 8
+const DEFAULT_TUNING_SEGMENT: TuningSegmentState = {
+  startS: null,
+  endS: null,
+  source: 'default',
+}
 const ROLE_OPTIONS = [
   { value: 'customer', label: '\u5ba2\u6237\u89c6\u56fe' },
   { value: 'aftersales', label: '\u552e\u540e\u89c6\u56fe' },
   { value: 'engineer', label: '\u7814\u53d1\u89c6\u56fe' },
 ]
+
+function clampPercent(value: number) {
+  return Math.min(Math.max(value, 0), 100)
+}
+
+function percentToTimeValue(percent: number, timeRange: ChartTimeRange) {
+  const span = timeRange.end - timeRange.start
+  if (span <= 0) return timeRange.start
+  return timeRange.start + (span * percent) / 100
+}
+
+function timeValueToPercent(value: number, timeRange: ChartTimeRange) {
+  const span = timeRange.end - timeRange.start
+  if (span <= 0) return 0
+  return clampPercent(((value - timeRange.start) / span) * 100)
+}
+
+function isChartDisposed(chart: ChartInstance) {
+  try {
+    return chart.isDisposed?.() === true
+  } catch {
+    return true
+  }
+}
 
 function App() {
   const chartCleanupRef = useRef<Map<string, () => void>>(new Map())
@@ -73,6 +104,9 @@ function App() {
   const [listTotal, setListTotal] = useState(0)
   const [viewRole, setViewRole] = useState('aftersales')
   const [viewMode, setViewMode] = useState<ViewMode>('upload')
+  const [tuningSegment, setTuningSegment] = useState<TuningSegmentState>(
+    DEFAULT_TUNING_SEGMENT,
+  )
 
   const loadLogList = async (options?: {
     preferLogId?: string
@@ -153,6 +187,7 @@ function App() {
       setDiagnostics([])
       setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
       setActiveLogMeta(null)
+      setTuningSegment(DEFAULT_TUNING_SEGMENT)
       const uploadResult = await uploadLogFile(file)
       const logId =
         uploadResult && typeof uploadResult.logId === 'string'
@@ -174,20 +209,22 @@ function App() {
       setModeSegments([])
       setDiagnostics([])
       setActiveLogMeta(null)
+      setTuningSegment(DEFAULT_TUNING_SEGMENT)
       setStatusText('\u4e0a\u4f20\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u540e\u7aef\u662f\u5426\u542f\u52a8\u3002')
     } finally {
       setIsUploading(false)
     }
   }
 
-  const cleanupChartInteractions = () => {
+  const cleanupChartInteractions = useCallback(() => {
     chartCleanupRef.current.forEach((cleanup) => cleanup())
     chartCleanupRef.current.clear()
     chartRegistryRef.current.clear()
-  }
+  }, [])
 
   const handleBackToUpload = () => {
     cleanupChartInteractions()
+    setTuningSegment(DEFAULT_TUNING_SEGMENT)
     setViewMode('upload')
   }
 
@@ -203,6 +240,7 @@ function App() {
         setChartHint(
           `\u5df2\u8c03\u7528\u56fe\u8868\u63a5\u53e3\uff08logId: ${selectedLogId}\uff09\uff1a\u5f53\u524d\u8fd4\u56de\u7a7a\u6570\u636e\uff08\u5360\u4f4d\uff09`,
         )
+        setTuningSegment(DEFAULT_TUNING_SEGMENT)
         return
       }
       const normalizedSeries = Array.isArray(data?.series) ? data.series : []
@@ -240,6 +278,7 @@ function App() {
       setTopicCharts([])
       setModeSegments([])
       setActiveLogMeta(null)
+      setTuningSegment(DEFAULT_TUNING_SEGMENT)
       void loadLogList({ preferLogId: '' })
       setChartHint(
         '\u56fe\u8868\u6570\u636e\u8bf7\u6c42\u5931\u8d25\uff08\u53ef\u80fd\u662f\u65e5\u5fd7\u5df2\u5931\u6548\uff0c\u8bf7\u5237\u65b0\u5217\u8868\u6216\u91cd\u65b0\u4e0a\u4f20\uff09',
@@ -254,6 +293,7 @@ function App() {
     setModeSegments([])
     setDiagnostics([])
     setActiveLogMeta(null)
+    setTuningSegment(DEFAULT_TUNING_SEGMENT)
     if (logId) {
       setChartHint('\u5df2\u5207\u6362\u65e5\u5fd7\uff0c\u8bf7\u70b9\u51fb\u6253\u5f00\u56fe\u8868\u6a21\u5757\u3002')
     } else {
@@ -285,30 +325,20 @@ function App() {
     setTopicCharts([])
     setDiagnostics([])
     setActiveLogMeta(null)
+    setTuningSegment(DEFAULT_TUNING_SEGMENT)
     setChartHint('\u89c6\u56fe\u89d2\u8272\u5df2\u5207\u6362\uff0c\u8bf7\u91cd\u65b0\u6253\u5f00\u56fe\u8868\u6a21\u5757\u3002')
   }
 
-  const clampPercent = (value: number) => Math.min(Math.max(value, 0), 100)
-
-  const percentToTimeValue = (percent: number, timeRange: ChartTimeRange) => {
-    const span = timeRange.end - timeRange.start
-    if (span <= 0) return timeRange.start
-    return timeRange.start + (span * percent) / 100
-  }
-
-  const timeValueToPercent = (value: number, timeRange: ChartTimeRange) => {
-    const span = timeRange.end - timeRange.start
-    if (span <= 0) return 0
-    return clampPercent(((value - timeRange.start) / span) * 100)
-  }
-
-  const syncChartZoom = (
+  const syncChartZoom = useCallback((
     sourceChartKey: string,
     sourceStartPercent: number,
     sourceEndPercent: number,
   ) => {
     const source = chartRegistryRef.current.get(sourceChartKey)
-    if (!source || isSyncingZoomRef.current) return
+    if (!source || isSyncingZoomRef.current || isChartDisposed(source.chart)) {
+      chartRegistryRef.current.delete(sourceChartKey)
+      return
+    }
 
     const sourceStartTime = percentToTimeValue(
       sourceStartPercent,
@@ -319,34 +349,47 @@ function App() {
     isSyncingZoomRef.current = true
     chartRegistryRef.current.forEach((target, targetChartKey) => {
       if (targetChartKey === sourceChartKey) return
+      if (isChartDisposed(target.chart)) {
+        chartRegistryRef.current.delete(targetChartKey)
+        chartCleanupRef.current.delete(targetChartKey)
+        return
+      }
 
       const targetStart = timeValueToPercent(sourceStartTime, target.timeRange)
       const targetEnd = timeValueToPercent(sourceEndTime, target.timeRange)
 
-      target.chart.dispatchAction({
-        type: 'dataZoom',
-        dataZoomIndex: 0,
-        start: targetStart,
-        end: targetEnd,
-      })
-      target.chart.dispatchAction({
-        type: 'dataZoom',
-        dataZoomIndex: 1,
-        start: targetStart,
-        end: targetEnd,
-      })
+      try {
+        target.chart.dispatchAction({
+          type: 'dataZoom',
+          dataZoomIndex: 0,
+          start: targetStart,
+          end: targetEnd,
+        })
+        target.chart.dispatchAction({
+          type: 'dataZoom',
+          dataZoomIndex: 1,
+          start: targetStart,
+          end: targetEnd,
+        })
+      } catch {
+        chartRegistryRef.current.delete(targetChartKey)
+        chartCleanupRef.current.delete(targetChartKey)
+      }
     })
     window.setTimeout(() => {
       isSyncingZoomRef.current = false
     }, 0)
-  }
+  }, [])
 
-  const bindChartInteractions = (
+  const bindChartInteractions = useCallback((
     chartKey: string,
     chartInstance: unknown,
     timeRange: ChartTimeRange,
   ) => {
     const chart = chartInstance as ChartInstance
+    if (!chart || isChartDisposed(chart)) {
+      return
+    }
     const oldCleanup = chartCleanupRef.current.get(chartKey)
     if (oldCleanup) oldCleanup()
     chartRegistryRef.current.set(chartKey, { chart, timeRange })
@@ -359,23 +402,40 @@ function App() {
     let selectStartX = 0
 
     const applyDataZoom = (start: number, end: number) => {
-      chart.dispatchAction({
-        type: 'dataZoom',
-        dataZoomIndex: 0,
-        start,
-        end,
-      })
-      chart.dispatchAction({
-        type: 'dataZoom',
-        dataZoomIndex: 1,
-        start,
-        end,
-      })
+      if (isChartDisposed(chart)) {
+        return
+      }
+
+      try {
+        chart.dispatchAction({
+          type: 'dataZoom',
+          dataZoomIndex: 0,
+          start,
+          end,
+        })
+        chart.dispatchAction({
+          type: 'dataZoom',
+          dataZoomIndex: 1,
+          start,
+          end,
+        })
+      } catch {
+        chartRegistryRef.current.delete(chartKey)
+        chartCleanupRef.current.delete(chartKey)
+      }
     }
 
     const resetZoom = () => {
       applyDataZoom(0, 100)
-      chart.dispatchAction({ type: 'restore' })
+      if (isChartDisposed(chart)) {
+        return
+      }
+      try {
+        chart.dispatchAction({ type: 'restore' })
+      } catch {
+        chartRegistryRef.current.delete(chartKey)
+        chartCleanupRef.current.delete(chartKey)
+      }
     }
 
     const finishLeftSelection = (clientX: number) => {
@@ -392,6 +452,20 @@ function App() {
         const start = (minX / rect.width) * 100
         const end = (maxX / rect.width) * 100
         applyDataZoom(start, end)
+
+        const selectedStartTime = percentToTimeValue(start, timeRange)
+        const selectedEndTime = percentToTimeValue(end, timeRange)
+        if (
+          Number.isFinite(selectedStartTime) &&
+          Number.isFinite(selectedEndTime) &&
+          selectedEndTime > selectedStartTime
+        ) {
+          setTuningSegment({
+            startS: Number(selectedStartTime.toFixed(3)),
+            endS: Number(selectedEndTime.toFixed(3)),
+            source: 'chart_selection',
+          })
+        }
       }
     }
 
@@ -423,6 +497,11 @@ function App() {
       if (!isMiddleDragging) return
       const rect = dom.getBoundingClientRect()
       if (rect.width <= 0) return
+
+      if (isChartDisposed(chart)) {
+        isMiddleDragging = false
+        return
+      }
 
       const deltaX = event.clientX - lastClientX
       lastClientX = event.clientX
@@ -477,7 +556,7 @@ function App() {
     }
 
     const onDataZoom = () => {
-      if (isSyncingZoomRef.current) return
+      if (isSyncingZoomRef.current || isChartDisposed(chart)) return
       const zoomState = chart.getOption()?.dataZoom?.[0]
       const start = Number(zoomState?.start ?? 0)
       const end = Number(zoomState?.end ?? 100)
@@ -499,16 +578,31 @@ function App() {
       dom.removeEventListener('mouseleave', onMouseLeave)
       dom.removeEventListener('auxclick', onAuxClick)
       window.removeEventListener('mouseup', onWindowMouseUp)
-      chart.off('datazoom', onDataZoom)
+      if (!isChartDisposed(chart)) {
+        try {
+          chart.off('datazoom', onDataZoom)
+        } catch {
+          // ignore disposed instances during cleanup
+        }
+      }
       chartRegistryRef.current.delete(chartKey)
     }
 
     chartCleanupRef.current.set(chartKey, cleanup)
-  }
+  }, [syncChartZoom])
+
+  const handleChartDispose = useCallback((chartKey: string) => {
+    const cleanup = chartCleanupRef.current.get(chartKey)
+    if (cleanup) {
+      cleanup()
+    }
+    chartCleanupRef.current.delete(chartKey)
+    chartRegistryRef.current.delete(chartKey)
+  }, [])
 
   useEffect(() => {
     return cleanupChartInteractions
-  }, [])
+  }, [cleanupChartInteractions])
 
   return (
     <div className="app">
@@ -561,7 +655,11 @@ function App() {
               onNextPage={handleNextPage}
               onLoadChart={handleLoadChart}
             />
-            <TuningPanel selectedLogId={selectedLogId || undefined} />
+            <TuningPanel
+              selectedLogId={selectedLogId || undefined}
+              tuningSegment={tuningSegment}
+              onTuningSegmentChange={setTuningSegment}
+            />
             <ChartPanel
               activeLogMeta={activeLogMeta}
               topicCharts={topicCharts}
@@ -570,6 +668,7 @@ function App() {
               diagnostics={diagnostics}
               chartHint={chartHint}
               onChartReady={bindChartInteractions}
+              onChartDispose={handleChartDispose}
             />
           </section>
         )}

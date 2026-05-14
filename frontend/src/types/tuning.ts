@@ -23,6 +23,14 @@ export type TuningSegment = {
   endS?: number
 }
 
+export type TuningSegmentSource = 'chart_selection' | 'manual' | 'default'
+
+export type TuningSegmentState = {
+  startS: number | null
+  endS: number | null
+  source: TuningSegmentSource
+}
+
 export type TuningMetrics = {
   trackingErrorRms: number
   trackingErrorPeak: number

@@ -1,8 +1,12 @@
-import { useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import ReactECharts from 'echarts-for-react'
 import DiagnosticsPanel from './DiagnosticsPanel'
 import type { DiagnosticItem } from './DiagnosticsPanel'
-import { buildTopicChartOption, getSeriesDisplayName } from '../utils/chartOptions'
+import {
+  buildTopicChartOption,
+  getSeriesDisplayName,
+  getSeriesTimeBounds,
+} from '../utils/chartOptions'
 
 type ChartPoint = [number, number]
 
@@ -46,9 +50,29 @@ type ChartPanelProps = {
     instance: unknown,
     timeRange: ChartTimeRange,
   ) => void
+  onChartDispose?: (chartKey: string) => void
 }
 
 type SelectedSeriesMap = Record<string, string[]>
+
+type ChartCardProps = {
+  chartId: string
+  title: string
+  series: ChartSeries[]
+  modeSegments: ModeSegment[]
+  selectedKeys?: string[]
+  onChartReady: (
+    chartKey: string,
+    instance: unknown,
+    timeRange: ChartTimeRange,
+  ) => void
+  onChartDispose?: (chartKey: string) => void
+  onToggleSeries: (
+    chartId: string,
+    series: ChartSeries[],
+    seriesKey: string,
+  ) => void
+}
 
 export type ChartTimeRange = {
   start: number
@@ -59,30 +83,132 @@ function getSeriesKey(series: ChartSeries, index: number) {
   return `${series.name}__${series.unit}__${index}`
 }
 
-function getVisibleSeries(
-  topicKey: string,
-  series: ChartSeries[],
-  selectedSeriesMap: SelectedSeriesMap,
-) {
-  const selectedKeys = selectedSeriesMap[topicKey]
-  if (!selectedKeys) return series
+function getVisibleSeries(series: ChartSeries[], selectedKeys?: string[]) {
+  if (!selectedKeys) {
+    return series
+  }
 
+  const selectedKeySet = new Set(selectedKeys)
   return series.filter((item, index) =>
-    selectedKeys.includes(getSeriesKey(item, index)),
+    selectedKeySet.has(getSeriesKey(item, index)),
   )
 }
 
 function getSeriesTimeRange(series: ChartSeries[]): ChartTimeRange {
-  const times = series.flatMap((item) =>
-    item.points.map((point) => point[0]).filter(Number.isFinite),
-  )
-  if (times.length === 0) return { start: 0, end: 0 }
-
+  const timeBounds = getSeriesTimeBounds(series)
   return {
-    start: Math.min(...times),
-    end: Math.max(...times),
+    start: timeBounds.start,
+    end: timeBounds.end,
   }
 }
+
+function buildChartId(topicChart: TopicChart, index: number) {
+  const baseKey = topicChart.topic || topicChart.title || 'topic'
+  return `${baseKey}__${index}`
+}
+
+const ChartCard = memo(function ChartCard({
+  chartId,
+  title,
+  series,
+  modeSegments,
+  selectedKeys,
+  onChartReady,
+  onChartDispose,
+  onToggleSeries,
+}: ChartCardProps) {
+  const allKeys = useMemo(() => series.map(getSeriesKey), [series])
+  const activeSelectedKeys = selectedKeys ?? allKeys
+  const visibleSeries = useMemo(
+    () => getVisibleSeries(series, activeSelectedKeys),
+    [activeSelectedKeys, series],
+  )
+  const timeRange = useMemo(() => getSeriesTimeRange(series), [series])
+
+  const chartOptionState = useMemo(() => {
+    try {
+      return {
+        option: buildTopicChartOption(
+          {
+            topic: chartId,
+            title,
+            series: visibleSeries,
+          },
+          modeSegments,
+        ),
+        error: '',
+      }
+    } catch (error) {
+      return {
+        option: null,
+        error:
+          error instanceof Error
+            ? error.message
+            : '图表配置构建失败。',
+      }
+    }
+  }, [chartId, modeSegments, title, visibleSeries])
+
+  const handleChartReady = useCallback(
+    (instance: unknown) => {
+      onChartReady(chartId, instance, timeRange)
+    },
+    [chartId, onChartReady, timeRange],
+  )
+
+  const handleSeriesToggle = useCallback(
+    (seriesKey: string) => {
+      onToggleSeries(chartId, series, seriesKey)
+    },
+    [chartId, onToggleSeries, series],
+  )
+
+  useEffect(() => {
+    return () => {
+      onChartDispose?.(chartId)
+    }
+  }, [chartId, onChartDispose])
+
+  return (
+    <div className="chart-wrap">
+      <h3 className="topic-title">{title}</h3>
+
+      {series.length > 0 ? (
+        <div className="series-selector">
+          <span className="series-selector-label">{'显示字段：'}</span>
+          {series.map((item, index) => {
+            const seriesKey = getSeriesKey(item, index)
+            return (
+              <label key={seriesKey} className="series-option">
+                <input
+                  type="checkbox"
+                  checked={activeSelectedKeys.includes(seriesKey)}
+                  onChange={() => handleSeriesToggle(seriesKey)}
+                />
+                {`${getSeriesDisplayName(item.name)} (${item.unit})`}
+              </label>
+            )
+          })}
+        </div>
+      ) : null}
+
+      {chartOptionState.error ? (
+        <div className="chart-placeholder">
+          {`该 topic 图表配置失败：${chartOptionState.error}`}
+        </div>
+      ) : visibleSeries.length === 0 ? (
+        <div className="chart-placeholder">{'当前 topic 暂无图表数据'}</div>
+      ) : (
+        <ReactECharts
+          option={chartOptionState.option}
+          lazyUpdate
+          style={{ height: 360 }}
+          onChartReady={handleChartReady}
+        />
+      )}
+    </div>
+  )
+})
 
 function ChartPanel({
   activeLogMeta,
@@ -92,121 +218,94 @@ function ChartPanel({
   diagnostics,
   chartHint,
   onChartReady,
+  onChartDispose,
 }: ChartPanelProps) {
   const [selectedSeriesMap, setSelectedSeriesMap] = useState<SelectedSeriesMap>({})
 
-  const handleSeriesToggle = (
-    topicKey: string,
-    series: ChartSeries[],
-    seriesKey: string,
-  ) => {
-    const allKeys = series.map(getSeriesKey)
-    const currentKeys = selectedSeriesMap[topicKey] ?? allKeys
-    const nextKeys = currentKeys.includes(seriesKey)
-      ? currentKeys.filter((key) => key !== seriesKey)
-      : [...currentKeys, seriesKey]
+  const handleSeriesToggle = useCallback(
+    (chartId: string, series: ChartSeries[], seriesKey: string) => {
+      const allKeys = series.map(getSeriesKey)
 
-    setSelectedSeriesMap((current) => ({
-      ...current,
-      [topicKey]: nextKeys,
-    }))
-  }
+      setSelectedSeriesMap((current) => {
+        const currentKeys = current[chartId] ?? allKeys
+        const nextKeys = currentKeys.includes(seriesKey)
+          ? currentKeys.filter((key) => key !== seriesKey)
+          : [...currentKeys, seriesKey]
 
-  const renderSeriesSelector = (topicKey: string, series: ChartSeries[]) => {
-    if (series.length === 0) return null
+        return {
+          ...current,
+          [chartId]: nextKeys,
+        }
+      })
+    },
+    [],
+  )
 
-    const allKeys = series.map(getSeriesKey)
-    const selectedKeys = selectedSeriesMap[topicKey] ?? allKeys
+  const chartCards = useMemo(
+    () =>
+      topicCharts.map((topicChart, index) => {
+        const chartId = buildChartId(topicChart, index)
+        return {
+          chartId,
+          title: topicChart.title,
+          series: topicChart.series,
+          selectedKeys: selectedSeriesMap[chartId],
+        }
+      }),
+    [selectedSeriesMap, topicCharts],
+  )
 
-    return (
-      <div className="series-selector">
-        <span className="series-selector-label">{'\u663e\u793a\u5b57\u6bb5\uff1a'}</span>
-        {series.map((item, index) => {
-          const seriesKey = getSeriesKey(item, index)
-          return (
-            <label key={seriesKey} className="series-option">
-              <input
-                type="checkbox"
-                checked={selectedKeys.includes(seriesKey)}
-                onChange={() => handleSeriesToggle(topicKey, series, seriesKey)}
-              />
-              {`${getSeriesDisplayName(item.name)} (${item.unit})`}
-            </label>
-          )
-        })}
-      </div>
-    )
-  }
+  const emptyStateMessage = activeLogMeta
+    ? '暂无可展示 topic'
+    : chartHint && chartHint !== '图表组件占位区'
+      ? chartHint
+      : '暂无图表数据'
 
   return (
     <>
       {activeLogMeta && (
         <p className="hint">
-          {`\u5f53\u524d\u5df2\u52a0\u8f7d\uff1a${activeLogMeta.fileName} (logId: ${activeLogMeta.logId})${
+          {`当前已加载：${activeLogMeta.fileName} (logId: ${activeLogMeta.logId})${
             activeLogMeta.uploadedAt
               ? ` / ${new Date(activeLogMeta.uploadedAt).toLocaleString()}`
               : ''
           }`}
         </p>
       )}
-      {topicCharts.length > 0 ? (
+      {chartCards.length > 0 ? (
         <div className="topic-chart-list">
-          {topicCharts.map((topicChart) => (
-            <div key={topicChart.topic} className="chart-wrap">
-              <h3 className="topic-title">{topicChart.title}</h3>
-              {renderSeriesSelector(topicChart.topic, topicChart.series)}
-              <ReactECharts
-                option={buildTopicChartOption(
-                  {
-                    ...topicChart,
-                    series: getVisibleSeries(
-                      topicChart.topic,
-                      topicChart.series,
-                      selectedSeriesMap,
-                    ),
-                  },
-                  modeSegments,
-                )}
-                style={{ height: 360 }}
-                onChartReady={(instance) =>
-                  onChartReady(
-                    topicChart.topic,
-                    instance,
-                    getSeriesTimeRange(topicChart.series),
-                  )
-                }
-              />
-            </div>
+          {chartCards.map((item) => (
+            <ChartCard
+              key={item.chartId}
+              chartId={item.chartId}
+              title={item.title}
+              series={item.series}
+              modeSegments={modeSegments}
+              selectedKeys={item.selectedKeys}
+              onChartReady={onChartReady}
+              onChartDispose={onChartDispose}
+              onToggleSeries={handleSeriesToggle}
+            />
           ))}
         </div>
       ) : seriesData.length > 0 ? (
-        <div className="chart-wrap">
-          {renderSeriesSelector('default', seriesData)}
-          <ReactECharts
-            option={buildTopicChartOption(
-              {
-                topic: 'default',
-                title: '\u9ed8\u8ba4\u56fe\u8868',
-                series: getVisibleSeries(
-                  'default',
-                  seriesData,
-                  selectedSeriesMap,
-                ),
-              },
-              modeSegments,
-            )}
-            style={{ height: 360 }}
-            onChartReady={(instance) =>
-              onChartReady('default', instance, getSeriesTimeRange(seriesData))
-            }
-          />
-        </div>
+        <ChartCard
+          key="default"
+          chartId="default"
+          title="默认图表"
+          series={seriesData}
+          modeSegments={modeSegments}
+          selectedKeys={selectedSeriesMap.default}
+          onChartReady={onChartReady}
+          onChartDispose={onChartDispose}
+          onToggleSeries={handleSeriesToggle}
+        />
       ) : (
-        <div className="chart-placeholder">{chartHint}</div>
+        <div className="chart-placeholder">{emptyStateMessage}</div>
       )}
       <DiagnosticsPanel diagnostics={diagnostics} />
     </>
   )
 }
 
-export default ChartPanel
+export default memo(ChartPanel)

@@ -19,6 +19,8 @@ import type {
   TuningReviewResponse,
   TuningRiskLevel,
   TuningSafetyBounds,
+  TuningSegment,
+  TuningSegmentState,
 } from '../types/tuning'
 import {
   buildTuningMarkdownReport,
@@ -33,6 +35,8 @@ import {
 
 type TuningPanelProps = {
   selectedLogId?: string
+  tuningSegment: TuningSegmentState
+  onTuningSegmentChange: (segment: TuningSegmentState) => void
 }
 
 type MetricDescriptor = {
@@ -234,6 +238,60 @@ function parseNumericInput(value: string) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function formatSegmentInputValue(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return ''
+  }
+
+  return String(value)
+}
+
+function formatSegmentDisplayValue(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return '--'
+  }
+
+  return value.toFixed(3).replace(/\.?0+$/, '')
+}
+
+function resolveSegmentForRequest(
+  startInput: string,
+  endInput: string,
+): {
+  segment?: TuningSegment
+  warning: string
+} {
+  const hasStart = startInput.trim().length > 0
+  const hasEnd = endInput.trim().length > 0
+
+  if (!hasStart && !hasEnd) {
+    return { warning: '' }
+  }
+
+  const startValue = parseNumericInput(startInput)
+  const endValue = parseNumericInput(endInput)
+
+  if (startValue === null || endValue === null) {
+    return {
+      warning: '当前分析片段不完整，将回退为默认分析片段�?',
+    }
+  }
+
+  if (startValue >= endValue) {
+    return {
+      warning: 'startS 必须小于 endS，当前将回退为默认分析片段�?',
+    }
+  }
+
+  return {
+    segment: {
+      startS: startValue,
+      endS: endValue,
+    },
+    warning: '',
+  }
+}
+
 function buildNumericProposalInputs(
   pidValues: TuningPidValues,
   safetyBounds: TuningSafetyBounds,
@@ -326,19 +384,48 @@ function buildParamsFilename(axis: TuningAxis, loop: TuningLoop) {
   return `px4_pid_tuning_${axis}_${loop}_${timestamp}.params`
 }
 
-function TuningPanel({ selectedLogId }: TuningPanelProps) {
+function TuningPanel({
+  selectedLogId,
+  tuningSegment,
+  onTuningSegmentChange,
+}: TuningPanelProps) {
   const [axis, setAxis] = useState<TuningAxis>('roll')
   const [loop, setLoop] = useState<TuningLoop>('rate')
   const [pidValues, setPidValues] = useState<TuningPidValues>(createEmptyPidValues)
   const [safetyBounds, setSafetyBounds] = useState<TuningSafetyBounds>(
     createEmptySafetyBounds,
   )
-  const [segmentStartS, setSegmentStartS] = useState('0')
-  const [segmentEndS, setSegmentEndS] = useState('10')
+  const [segmentStartS, setSegmentStartS] = useState(() =>
+    formatSegmentInputValue(tuningSegment.startS),
+  )
+  const [segmentEndS, setSegmentEndS] = useState(() =>
+    formatSegmentInputValue(tuningSegment.endS),
+  )
+
+  const isManualSegment = tuningSegment.source === 'manual'
+  const chartSegmentStartStr = formatSegmentInputValue(tuningSegment.startS)
+  const chartSegmentEndStr = formatSegmentInputValue(tuningSegment.endS)
+  const effectiveStartS = isManualSegment ? segmentStartS : chartSegmentStartStr
+  const effectiveEndS = isManualSegment ? segmentEndS : chartSegmentEndStr
 
   const tuningInputKey = useMemo(
-    () => [selectedLogId ?? '', axis, loop, segmentStartS, segmentEndS].join('|'),
-    [selectedLogId, axis, loop, segmentStartS, segmentEndS],
+    () =>
+      [
+        selectedLogId ?? '',
+        axis,
+        loop,
+        tuningSegment.source,
+        effectiveStartS,
+        effectiveEndS,
+      ].join('|'),
+    [
+      selectedLogId,
+      axis,
+      loop,
+      tuningSegment.source,
+      effectiveStartS,
+      effectiveEndS,
+    ],
   )
 
   const [isCalculatingMetrics, setIsCalculatingMetrics] = useState(false)
@@ -386,11 +473,46 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
     proposal: activeProposalResult,
     review: activeReviewResult,
   })
+  const segmentRequest = useMemo(
+    () => resolveSegmentForRequest(effectiveStartS, effectiveEndS),
+    [effectiveEndS, effectiveStartS],
+  )
 
   const paramsExportHint = getPx4ParamsExportHint({
     proposal: activeProposalResult,
     review: activeReviewResult,
   })
+
+  const handleSegmentInputChange = (
+    field: 'startS' | 'endS',
+    value: string,
+  ) => {
+    const nextStart = field === 'startS' ? value : effectiveStartS
+    const nextEnd = field === 'endS' ? value : effectiveEndS
+
+    if (field === 'startS') {
+      setSegmentStartS(value)
+    } else {
+      setSegmentEndS(value)
+    }
+
+    const hasStart = nextStart.trim().length > 0
+    const hasEnd = nextEnd.trim().length > 0
+    if (!hasStart && !hasEnd) {
+      onTuningSegmentChange({
+        startS: null,
+        endS: null,
+        source: 'default',
+      })
+      return
+    }
+
+    onTuningSegmentChange({
+      startS: parseNumericInput(nextStart),
+      endS: parseNumericInput(nextEnd),
+      source: 'manual',
+    })
+  }
 
   const handlePidChange = (gain: TuningGainKey, value: string) => {
     setPidValues((current) => ({
@@ -432,24 +554,10 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
   const handleCalculateMetrics = async () => {
     const requestKey = tuningInputKey
     if (!selectedLogId) {
-      setMetricsError('����ѡ����־')
+      setMetricsError('请先选择日志')
       setMetricsErrorKey(requestKey)
       return
     }
-
-    const segmentStartValue = Number(segmentStartS)
-    const segmentEndValue = Number(segmentEndS)
-    const segment =
-      segmentStartS.trim() || segmentEndS.trim()
-        ? {
-            ...(segmentStartS.trim() && Number.isFinite(segmentStartValue)
-              ? { startS: segmentStartValue }
-              : {}),
-            ...(segmentEndS.trim() && Number.isFinite(segmentEndValue)
-              ? { endS: segmentEndValue }
-              : {}),
-          }
-        : undefined
 
     try {
       setIsCalculatingMetrics(true)
@@ -468,7 +576,7 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
         logId: selectedLogId,
         axis,
         loop,
-        ...(segment && Object.keys(segment).length > 0 ? { segment } : {}),
+        ...(segmentRequest.segment ? { segment: segmentRequest.segment } : {}),
       })
       setMetricsResult(result)
       setMetricsValidKey(requestKey)
@@ -478,7 +586,7 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
       setMetricsError(
         error instanceof Error
           ? error.message
-          : '����ָ�����ʧ�ܣ����Ժ����ԡ�',
+          : '计算跟随指标失败，请稍后重试�?',
       )
       setMetricsErrorKey(requestKey)
     } finally {
@@ -491,7 +599,7 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
     const stableMetrics =
       metricsValidKey === tuningInputKey ? metricsResult : null
     if (!stableMetrics) {
-      setProposalError('���ȼ������ָ��')
+      setProposalError('请先计算跟随指标')
       setProposalErrorKey(requestKey)
       return
     }
@@ -499,7 +607,7 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
     const numericInputs = buildNumericProposalInputs(pidValues, safetyBounds)
     if (numericInputs.error || !numericInputs.currentParams || !numericInputs.bounds) {
       setProposalError(
-        numericInputs.error ?? '������д��Ч�ĵ�ǰ PID �����Ͱ�ȫ�߽硣',
+        numericInputs.error ?? '请先填写有效的当�? PID 参数和安全边界�?',
       )
       setProposalErrorKey(requestKey)
       setProposalResult(null)
@@ -538,7 +646,7 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
       setProposalError(
         error instanceof Error
           ? error.message
-          : '��ѡ��������ʧ�ܣ����Ժ����ԡ�',
+          : '生成候选参数失败，请稍后重试�?',
       )
       setProposalErrorKey(requestKey)
     } finally {
@@ -553,7 +661,7 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
     const stableProposal =
       proposalValidKey === tuningInputKey ? proposalResult : null
     if (!stableProposal || !stableMetrics) {
-      setReviewError('�������ɺ�ѡ������')
+      setReviewError('请先生成候选参�?')
       setReviewErrorKey(requestKey)
       return
     }
@@ -561,7 +669,7 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
     const numericInputs = buildNumericProposalInputs(pidValues, safetyBounds)
     if (numericInputs.error || !numericInputs.currentParams || !numericInputs.bounds) {
       setReviewError(
-        numericInputs.error ?? '������д��Ч�ĵ�ǰ PID �����Ͱ�ȫ�߽硣',
+        numericInputs.error ?? '请先填写有效的当�? PID 参数和安全边界�?',
       )
       setReviewErrorKey(requestKey)
       setReviewResult(null)
@@ -598,7 +706,7 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
       setReviewError(
         error instanceof Error
           ? error.message
-          : 'Safety / AI Review ʧ�ܣ����Ժ����ԡ�',
+          : 'Safety / AI Review 失败，请稍后重试�?',
       )
       setReviewErrorKey(requestKey)
     } finally {
@@ -684,6 +792,22 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
 
       <div className="tuning-section">
         <h4 className="tuning-subtitle">{'分析片段（秒�?'}</h4>
+        {tuningSegment.source === 'chart_selection' && segmentRequest.segment ? (
+          <p className="hint">
+            {`当前分析片段来自图表框选：${formatSegmentDisplayValue(segmentRequest.segment.startS ?? null)}s ~ ${formatSegmentDisplayValue(segmentRequest.segment.endS ?? null)}s`}
+          </p>
+        ) : tuningSegment.source === 'manual' && segmentRequest.segment ? (
+          <p className="hint">
+            {`当前分析片段已手动修改：${formatSegmentDisplayValue(segmentRequest.segment.startS ?? null)}s ~ ${formatSegmentDisplayValue(segmentRequest.segment.endS ?? null)}s`}
+          </p>
+        ) : (
+          <p className="hint">{'当前使用默认分析片段'}</p>
+        )}
+        {segmentRequest.warning ? (
+          <div className="tuning-alert tuning-alert-warning" role="status">
+            {segmentRequest.warning}
+          </div>
+        ) : null}
         <div className="tuning-grid">
           <label className="tuning-field">
             <span className="series-selector-label">{'startS'}</span>
@@ -691,9 +815,11 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
               type="number"
               step="any"
               className="input tuning-input"
-              value={segmentStartS}
-              onChange={(event) => setSegmentStartS(event.target.value)}
-              placeholder="0"
+              value={effectiveStartS}
+              onChange={(event) =>
+                handleSegmentInputChange('startS', event.target.value)
+              }
+              placeholder="默认"
             />
           </label>
 
@@ -703,9 +829,11 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
               type="number"
               step="any"
               className="input tuning-input"
-              value={segmentEndS}
-              onChange={(event) => setSegmentEndS(event.target.value)}
-              placeholder="10"
+              value={effectiveEndS}
+              onChange={(event) =>
+                handleSegmentInputChange('endS', event.target.value)
+              }
+              placeholder="默认"
             />
           </label>
         </div>
@@ -938,8 +1066,8 @@ function TuningPanel({ selectedLogId }: TuningPanelProps) {
           <>
             <div className="tuning-metrics-table">
               <div className="tuning-metrics-row tuning-metrics-header">
-                <span>{'参数�?'}</span>
-                <span>{'PX4 参数�?'}</span>
+                <span>{'参数'}</span>
+                <span>{'PX4 参数'}</span>
               </div>
               {PROPOSAL_GAIN_KEYS.map((key) => (
                 <div key={key} className="tuning-metrics-row">

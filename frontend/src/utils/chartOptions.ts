@@ -1,5 +1,108 @@
 import type { ModeSegment, TopicChart } from '../types/log'
 
+type ChartSeriesLike = {
+  name?: string
+  unit?: string
+  points?: unknown
+}
+
+export type ChartTimeBounds = {
+  start: number
+  end: number
+  hasData: boolean
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function normalizeSeriesPoints(points: unknown): Array<[number, number]> {
+  if (!Array.isArray(points)) {
+    return []
+  }
+
+  const normalized: Array<[number, number]> = []
+  for (const point of points) {
+    if (!Array.isArray(point) || point.length < 2) {
+      continue
+    }
+
+    const time = point[0]
+    const value = point[1]
+    if (!isFiniteNumber(time) || !isFiniteNumber(value)) {
+      continue
+    }
+
+    normalized.push([time, value])
+  }
+
+  return normalized
+}
+
+function normalizeSeries(series: unknown): Array<{
+  name: string
+  unit: string
+  points: Array<[number, number]>
+}> {
+  if (!Array.isArray(series)) {
+    return []
+  }
+
+  return series.map((item) => {
+    const safeItem = (item ?? {}) as ChartSeriesLike
+    return {
+      name: typeof safeItem.name === 'string' ? safeItem.name : 'unknown',
+      unit: typeof safeItem.unit === 'string' ? safeItem.unit : '',
+      points: normalizeSeriesPoints(safeItem.points),
+    }
+  })
+}
+
+export function getSeriesTimeBounds(
+  series: Array<ChartSeriesLike> | null | undefined,
+): ChartTimeBounds {
+  if (!Array.isArray(series) || series.length === 0) {
+    return { start: 0, end: 0, hasData: false }
+  }
+
+  let minTime = Infinity
+  let maxTime = -Infinity
+
+  for (const item of series) {
+    const points = normalizeSeriesPoints(item?.points)
+    for (const point of points) {
+      const time = point[0]
+      if (time < minTime) {
+        minTime = time
+      }
+      if (time > maxTime) {
+        maxTime = time
+      }
+    }
+  }
+
+  if (!Number.isFinite(minTime) || !Number.isFinite(maxTime)) {
+    return { start: 0, end: 0, hasData: false }
+  }
+
+  return {
+    start: minTime,
+    end: maxTime,
+    hasData: true,
+  }
+}
+
+export function getChartTimeRange(
+  chart: Pick<TopicChart, 'series'> | null | undefined,
+) {
+  const timeBounds = getSeriesTimeBounds(chart?.series)
+  if (!timeBounds.hasData) {
+    return 0
+  }
+
+  return Math.max(0, timeBounds.end - timeBounds.start)
+}
+
 export function getSeriesDisplayName(name: string) {
   if (name === 'Altitude' || name === 'altitude') return '\u9ad8\u5ea6'
   if (name === 'Speed' || name === 'speed' || name === 'speed_3d')
@@ -37,20 +140,20 @@ export function getSeriesDisplayName(name: string) {
   return name
 }
 
-function getChartTimeRange(chart: TopicChart) {
-  const times = chart.series.flatMap((item) =>
-    item.points.map((point) => point[0]).filter(Number.isFinite),
-  )
-  if (times.length === 0) return 0
-
-  return Math.max(...times) - Math.min(...times)
-}
-
 export function buildTopicChartOption(
   chart: TopicChart,
   modeSegments: ModeSegment[],
 ) {
-  const chartTimeRange = getChartTimeRange(chart)
+  const normalizedSeries = normalizeSeries(chart?.series)
+  const normalizedModeSegments = Array.isArray(modeSegments)
+    ? modeSegments.filter(
+        (seg) =>
+          isFiniteNumber(seg?.start) &&
+          isFiniteNumber(seg?.end) &&
+          seg.end >= seg.start,
+      )
+    : []
+  const chartTimeRange = getChartTimeRange({ series: normalizedSeries })
   const minModeLabelDuration = Math.max(5, chartTimeRange * 0.08)
 
   return {
@@ -73,7 +176,7 @@ export function buildTopicChartOption(
     legend: {
       type: 'scroll',
       top: 8,
-      data: chart.series.map(
+      data: normalizedSeries.map(
         (item) => `${getSeriesDisplayName(item.name)} (${item.unit})`,
       ),
     },
@@ -104,14 +207,14 @@ export function buildTopicChartOption(
         height: 18,
       },
     ],
-    series: chart.series.map((item, idx) => ({
+    series: normalizedSeries.map((item, idx) => ({
       name: `${getSeriesDisplayName(item.name)} (${item.unit})`,
       type: 'line',
       smooth: false,
       showSymbol: false,
       data: item.points,
       markArea:
-        idx === 0 && modeSegments.length > 0
+        idx === 0 && normalizedModeSegments.length > 0
           ? {
               silent: true,
               label: {
@@ -125,20 +228,18 @@ export function buildTopicChartOption(
               itemStyle: {
                 opacity: 0.1,
               },
-              data: modeSegments
-                .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end))
-                .map((seg) => [
-                  {
-                    name:
-                      seg.end - seg.start >= minModeLabelDuration ? seg.mode : '',
-                    xAxis: seg.start,
-                    itemStyle: {
-                      color: seg.color || '#94a3b8',
-                      opacity: 0.12,
-                    },
+              data: normalizedModeSegments.map((seg) => [
+                {
+                  name:
+                    seg.end - seg.start >= minModeLabelDuration ? seg.mode : '',
+                  xAxis: seg.start,
+                  itemStyle: {
+                    color: seg.color || '#94a3b8',
+                    opacity: 0.12,
                   },
-                  { xAxis: seg.end },
-                ]),
+                },
+                { xAxis: seg.end },
+              ]),
             }
           : undefined,
     })),
