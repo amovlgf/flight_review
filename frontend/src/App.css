@@ -19,6 +19,22 @@
   gap: 16px;
 }
 
+.page {
+  display: grid;
+  gap: 16px;
+}
+
+.page-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.page-title-row h2 {
+  margin-bottom: 0;
+}
+
 .card {
   border: 1px solid #d8dee9;
   border-radius: 12px;
@@ -44,6 +60,7 @@
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 10px;
 }
@@ -122,6 +139,162 @@
   padding: 8px;
 }
 
+.tuning-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.tuning-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tuning-grid-compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tuning-field {
+  display: grid;
+  gap: 6px;
+}
+
+.tuning-select,
+.tuning-input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tuning-section {
+  display: grid;
+  gap: 10px;
+}
+
+.tuning-subtitle {
+  margin: 0;
+  font-size: 14px;
+  color: #334155;
+}
+
+.tuning-param-name {
+  font-size: 13px;
+  color: #4f5f75;
+}
+
+.tuning-note {
+  margin-top: -4px;
+}
+
+.tuning-bounds-table {
+  display: grid;
+  gap: 8px;
+}
+
+.tuning-bounds-row {
+  display: grid;
+  grid-template-columns: 72px repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: center;
+}
+
+.tuning-bounds-header {
+  font-size: 13px;
+  color: #4f5f75;
+}
+
+.tuning-actions {
+  margin-bottom: 0;
+}
+
+.tuning-alert {
+  border: 1px solid #d8dee9;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.tuning-alert strong {
+  color: #7c2d12;
+}
+
+.tuning-alert-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.tuning-alert-warning {
+  border-color: #f59e0b;
+  background: #fff8eb;
+  color: #7c2d12;
+}
+
+.tuning-alert-error {
+  border-color: #ef4444;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
+.tuning-alert-risk {
+  border-color: #f97316;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.tuning-alert-info {
+  border-color: #60a5fa;
+  background: #eef6ff;
+  color: #1d4ed8;
+}
+
+.tuning-metrics-table {
+  display: grid;
+  gap: 8px;
+}
+
+.tuning-metrics-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.tuning-metrics-header {
+  border-style: dashed;
+  color: #4f5f75;
+  font-size: 13px;
+}
+
+.tuning-proposal-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.tuning-proposal-list {
+  display: grid;
+  gap: 8px;
+}
+
+.tuning-proposal-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #ffffff;
+}
+
+.tuning-proposal-line {
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  color: #334155;
+}
+
 .topic-chart-list {
   display: grid;
   gap: 12px;
@@ -130,6 +303,32 @@
 .topic-title {
   margin: 8px 8px 2px;
   font-size: 16px;
+}
+
+.series-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin: 8px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.series-selector-label {
+  color: #334155;
+  font-weight: 600;
+}
+
+.series-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.series-option input {
+  cursor: pointer;
 }
 
 .diag-list {
@@ -168,6 +367,13 @@
 
 @media (max-width: 900px) {
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tuning-grid,
+  .tuning-grid-compact,
+  .tuning-bounds-row,
+  .tuning-metrics-row {
     grid-template-columns: 1fr;
   }
 

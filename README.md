@@ -27,6 +27,7 @@
   - 优先提取 PX4 常见主题数据（`vehicle_local_position`、`battery_status`、`vehicle_attitude`、`vehicle_gps_position`、`actuator_outputs`）
   - 若主题提取失败则自动回退演示时序，保证功能可用
   - 前端按“一个主题一个图表”展示，单图尽量包含该主题内可提取字段
+  - 基于 `vehicle_status.nav_state` 为图表叠加飞控模式背景色
 - 前端 API 调用：`frontend/src/services/api.ts`
 - 角色话题策略文件：`docs/role-topic-policy.txt`（修改后重启后端生效）
 

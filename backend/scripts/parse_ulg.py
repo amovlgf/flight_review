@@ -4,6 +4,43 @@ import sys
 
 from pyulog import ULog
 
+NAV_STATE_NAME_MAP = {
+    0: "MANUAL",
+    1: "ALTCTL",
+    2: "POSCTL",
+    3: "AUTO_MISSION",
+    4: "AUTO_LOITER",
+    5: "AUTO_RTL",
+    6: "ACRO",
+    7: "OFFBOARD",
+    8: "STABILIZED",
+    9: "AUTO_TAKEOFF",
+    10: "AUTO_LAND",
+    11: "AUTO_FOLLOW_TARGET",
+    12: "AUTO_PRECLAND",
+    13: "ORBIT",
+    14: "AUTO_VTOL_TAKEOFF",
+}
+
+NAV_STATE_COLOR_MAP = {
+    "MANUAL": "#f59e0b",
+    "ALTCTL": "#84cc16",
+    "POSCTL": "#22c55e",
+    "AUTO_MISSION": "#0ea5e9",
+    "AUTO_LOITER": "#38bdf8",
+    "AUTO_RTL": "#8b5cf6",
+    "ACRO": "#ef4444",
+    "OFFBOARD": "#14b8a6",
+    "STABILIZED": "#f97316",
+    "AUTO_TAKEOFF": "#10b981",
+    "AUTO_LAND": "#6366f1",
+    "AUTO_FOLLOW_TARGET": "#06b6d4",
+    "AUTO_PRECLAND": "#a855f7",
+    "ORBIT": "#3b82f6",
+    "AUTO_VTOL_TAKEOFF": "#0d9488",
+    "UNKNOWN": "#94a3b8",
+}
+
 
 def normalize_time_us(timestamp_array):
     if timestamp_array is None or len(timestamp_array) == 0:
@@ -233,6 +270,53 @@ def append_actuator_outputs(topic_charts, used_topics, datasets):
         used_topics.append(topic_name)
 
 
+def build_mode_segments(vehicle_status_ds):
+    if not vehicle_status_ds:
+        return []
+
+    data = vehicle_status_ds.data
+    if "timestamp" not in data or "nav_state" not in data:
+        return []
+
+    times = normalize_time_us(data["timestamp"])
+    nav_states = data["nav_state"]
+    if not times or len(times) != len(nav_states):
+        return []
+
+    segments = []
+    current_mode_code = int(nav_states[0])
+    current_start = times[0]
+
+    for i in range(1, len(times)):
+        mode_code = int(nav_states[i])
+        if mode_code != current_mode_code:
+            mode_name = NAV_STATE_NAME_MAP.get(current_mode_code, "UNKNOWN")
+            segments.append(
+                {
+                    "start": current_start,
+                    "end": times[i],
+                    "mode": mode_name,
+                    "mode_code": current_mode_code,
+                    "color": NAV_STATE_COLOR_MAP.get(mode_name, NAV_STATE_COLOR_MAP["UNKNOWN"]),
+                }
+            )
+            current_mode_code = mode_code
+            current_start = times[i]
+
+    mode_name = NAV_STATE_NAME_MAP.get(current_mode_code, "UNKNOWN")
+    segments.append(
+        {
+            "start": current_start,
+            "end": times[-1],
+            "mode": mode_name,
+            "mode_code": current_mode_code,
+            "color": NAV_STATE_COLOR_MAP.get(mode_name, NAV_STATE_COLOR_MAP["UNKNOWN"]),
+        }
+    )
+
+    return segments
+
+
 def append_vehicle_attitude_setpoint(topic_charts, used_topics, ds):
     if not ds:
         return
@@ -314,6 +398,7 @@ def main():
     vehicle_attitude = find_dataset(ulog, ["vehicle_attitude"])
     vehicle_attitude_setpoint = find_dataset(ulog, ["vehicle_attitude_setpoint"])
     vehicle_gps = find_dataset(ulog, ["vehicle_gps_position"])
+    vehicle_status = find_dataset(ulog, ["vehicle_status"])
     actuator_outputs_list = find_datasets(ulog, ["actuator_outputs"])
     generic_topic_names = [
         "vehicle_angular_velocity",
@@ -392,11 +477,14 @@ def main():
     for ds in generic_datasets:
         append_generic_topic(topic_charts, used_topics, ds)
 
+    mode_segments = build_mode_segments(vehicle_status)
+
     if not topic_charts:
         payload = {
             "dataSource": "px4-topics-derived",
             "topicCharts": [],
-            "usedTopics": []
+            "usedTopics": [],
+            "modeSegments": mode_segments,
         }
         print(json.dumps(payload))
         return
@@ -405,6 +493,7 @@ def main():
         "dataSource": "px4-topics-derived",
         "usedTopics": used_topics,
         "topicCharts": topic_charts,
+        "modeSegments": mode_segments,
     }
     print(json.dumps(payload))
 
