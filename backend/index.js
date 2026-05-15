@@ -112,7 +112,7 @@ app.post('/api/logs/upload', upload.single('logFile'), (req, res) => {
 
 app.get('/api/logs/chart-data', (req, res) => {
   const logId = typeof req.query.logId === 'string' ? req.query.logId : '';
-  const roleRaw = typeof req.query.role === 'string' ? req.query.role : 'aftersales';
+  const roleRaw = typeof req.query.role === 'string' ? req.query.role : undefined;
   const role = resolveRole(roleRaw);
   if (!logId) {
     return res.status(400).json({

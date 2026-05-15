@@ -30,7 +30,7 @@ const DEFAULT_ROLE_TOPIC_POLICY = {
   engineer: '*',
 };
 
-const DEFAULT_ROLE = 'aftersales';
+const DEFAULT_ROLE = 'engineer';
 const DEFAULT_POLICY_PATH = path.join(
   __dirname,
   '..',

@@ -79,12 +79,12 @@ const METRIC_ROWS: MetricDescriptor[] = [
   },
   {
     key: 'trackingErrorPeak',
-    label: '峰值误�?',
+    label: '峰值误差',
     format: (value) => formatMetricValue(value, { digits: 4 }),
   },
   {
     key: 'overshootPercent',
-    label: '超调�?',
+    label: '超调量',
     format: (value) => formatMetricValue(value, { digits: 2, suffix: '%' }),
   },
   {
@@ -99,7 +99,7 @@ const METRIC_ROWS: MetricDescriptor[] = [
   },
   {
     key: 'dominantOscillationHz',
-    label: '主振荡频�?',
+    label: '主振荡频率',
     format: (value) => formatMetricValue(value, { digits: 3, suffix: ' Hz' }),
   },
   {
@@ -124,27 +124,27 @@ const METRIC_ROWS: MetricDescriptor[] = [
 ]
 
 const PROPOSAL_STATUS_LABELS = {
-  proposal_generated: '已生成候选参�?',
+  proposal_generated: '已生成候选参数',
   no_change: '保持不变',
-  rejected: '已拒�?',
+  rejected: '已拒绝',
 } as const
 
 const REVIEW_STATUS_MESSAGES = {
-  rejected: '不建议采用该参数建议�?',
-  manual_review_required: '需要人工复核�?',
-  approved_for_sitl_only: '仅建议用�? SITL 或受控测试，不可直接用于实机�?',
+  rejected: '不建议采用该参数建议。',
+  manual_review_required: '需要人工复核。',
+  approved_for_sitl_only: '仅建议用于 SITL 或受控测试，不可直接用于实机。',
 } as const
 
 const REVIEW_STATUS_LABELS = {
-  rejected: '已拒�?',
-  manual_review_required: '需要人工复�?',
+  rejected: '已拒绝',
+  manual_review_required: '需要人工复核',
   approved_for_sitl_only: '仅限 SITL / 受控测试',
 } as const
 
 const RISK_LEVEL_LABELS = {
-  low: '低风�?',
-  medium: '中风�?',
-  high: '高风�?',
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
 } as const
 
 function formatMetricValue(
@@ -273,13 +273,13 @@ function resolveSegmentForRequest(
 
   if (startValue === null || endValue === null) {
     return {
-      warning: '当前分析片段不完整，将回退为默认分析片段�?',
+      warning: '当前分析片段不完整，将回退为默认分析片段。',
     }
   }
 
   if (startValue >= endValue) {
     return {
-      warning: 'startS 必须小于 endS，当前将回退为默认分析片段�?',
+      warning: 'startS 必须小于 endS，当前将回退为默认分析片段。',
     }
   }
 
@@ -337,7 +337,7 @@ function buildNumericProposalInputs(
     return {
       currentParams: null,
       bounds: null,
-      error: '请先填写有效的当�? PID 参数和安全边界�?',
+      error: '请先填写有效的当前 PID 参数和安全边界。',
     }
   }
 
@@ -439,15 +439,16 @@ function TuningPanel({
   const [isGeneratingProposal, setIsGeneratingProposal] = useState(false)
   const [proposalError, setProposalError] = useState('')
   const [proposalErrorKey, setProposalErrorKey] = useState<string | null>(null)
-  const [proposalResult, setProposalResult] = useState<TuningProposalResponse | null>(
-    null,
-  )
+  const [proposalResult, setProposalResult] =
+    useState<TuningProposalResponse | null>(null)
   const [proposalValidKey, setProposalValidKey] = useState<string | null>(null)
 
   const [isReviewing, setIsReviewing] = useState(false)
   const [reviewError, setReviewError] = useState('')
   const [reviewErrorKey, setReviewErrorKey] = useState<string | null>(null)
-  const [reviewResult, setReviewResult] = useState<TuningReviewResponse | null>(null)
+  const [reviewResult, setReviewResult] = useState<TuningReviewResponse | null>(
+    null,
+  )
   const [reviewValidKey, setReviewValidKey] = useState<string | null>(null)
 
   const activeMetricsResult =
@@ -498,6 +499,7 @@ function TuningPanel({
 
     const hasStart = nextStart.trim().length > 0
     const hasEnd = nextEnd.trim().length > 0
+
     if (!hasStart && !hasEnd) {
       onTuningSegmentChange({
         startS: null,
@@ -514,11 +516,7 @@ function TuningPanel({
     })
   }
 
-  const handlePidChange = (gain: TuningGainKey, value: string) => {
-    setPidValues((current) => ({
-      ...current,
-      [gain]: value,
-    }))
+  const invalidateProposalAndReview = () => {
     setProposalError('')
     setProposalErrorKey(null)
     setProposalResult(null)
@@ -527,6 +525,14 @@ function TuningPanel({
     setReviewErrorKey(null)
     setReviewResult(null)
     setReviewValidKey(null)
+  }
+
+  const handlePidChange = (gain: TuningGainKey, value: string) => {
+    setPidValues((current) => ({
+      ...current,
+      [gain]: value,
+    }))
+    invalidateProposalAndReview()
   }
 
   const handleSafetyBoundChange = (
@@ -541,14 +547,7 @@ function TuningPanel({
         [field]: value,
       },
     }))
-    setProposalError('')
-    setProposalErrorKey(null)
-    setProposalResult(null)
-    setProposalValidKey(null)
-    setReviewError('')
-    setReviewErrorKey(null)
-    setReviewResult(null)
-    setReviewValidKey(null)
+    invalidateProposalAndReview()
   }
 
   const handleCalculateMetrics = async () => {
@@ -563,14 +562,7 @@ function TuningPanel({
       setIsCalculatingMetrics(true)
       setMetricsError('')
       setMetricsErrorKey(null)
-      setProposalError('')
-      setProposalErrorKey(null)
-      setProposalResult(null)
-      setProposalValidKey(null)
-      setReviewError('')
-      setReviewErrorKey(null)
-      setReviewResult(null)
-      setReviewValidKey(null)
+      invalidateProposalAndReview()
 
       const result = await calculateTuningMetrics({
         logId: selectedLogId,
@@ -586,7 +578,7 @@ function TuningPanel({
       setMetricsError(
         error instanceof Error
           ? error.message
-          : '计算跟随指标失败，请稍后重试�?',
+          : '计算跟随指标失败，请稍后重试。',
       )
       setMetricsErrorKey(requestKey)
     } finally {
@@ -598,6 +590,7 @@ function TuningPanel({
     const requestKey = tuningInputKey
     const stableMetrics =
       metricsValidKey === tuningInputKey ? metricsResult : null
+
     if (!stableMetrics) {
       setProposalError('请先计算跟随指标')
       setProposalErrorKey(requestKey)
@@ -607,7 +600,7 @@ function TuningPanel({
     const numericInputs = buildNumericProposalInputs(pidValues, safetyBounds)
     if (numericInputs.error || !numericInputs.currentParams || !numericInputs.bounds) {
       setProposalError(
-        numericInputs.error ?? '请先填写有效的当�? PID 参数和安全边界�?',
+        numericInputs.error ?? '请先填写有效的当前 PID 参数和安全边界。',
       )
       setProposalErrorKey(requestKey)
       setProposalResult(null)
@@ -618,9 +611,6 @@ function TuningPanel({
       setReviewValidKey(null)
       return
     }
-
-    const currentParams = numericInputs.currentParams
-    const bounds = numericInputs.bounds
 
     try {
       setIsGeneratingProposal(true)
@@ -634,8 +624,8 @@ function TuningPanel({
       const result = await calculateTuningProposal({
         axis,
         loop,
-        currentParams,
-        bounds,
+        currentParams: numericInputs.currentParams,
+        bounds: numericInputs.bounds,
         metrics: stableMetrics.metrics,
       })
       setProposalResult(result)
@@ -646,7 +636,7 @@ function TuningPanel({
       setProposalError(
         error instanceof Error
           ? error.message
-          : '生成候选参数失败，请稍后重试�?',
+          : '生成候选参数失败，请稍后重试。',
       )
       setProposalErrorKey(requestKey)
     } finally {
@@ -660,8 +650,9 @@ function TuningPanel({
       metricsValidKey === tuningInputKey ? metricsResult : null
     const stableProposal =
       proposalValidKey === tuningInputKey ? proposalResult : null
+
     if (!stableProposal || !stableMetrics) {
-      setReviewError('请先生成候选参�?')
+      setReviewError('请先生成候选参数')
       setReviewErrorKey(requestKey)
       return
     }
@@ -669,16 +660,13 @@ function TuningPanel({
     const numericInputs = buildNumericProposalInputs(pidValues, safetyBounds)
     if (numericInputs.error || !numericInputs.currentParams || !numericInputs.bounds) {
       setReviewError(
-        numericInputs.error ?? '请先填写有效的当�? PID 参数和安全边界�?',
+        numericInputs.error ?? '请先填写有效的当前 PID 参数和安全边界。',
       )
       setReviewErrorKey(requestKey)
       setReviewResult(null)
       setReviewValidKey(null)
       return
     }
-
-    const currentParams = numericInputs.currentParams
-    const bounds = numericInputs.bounds
 
     try {
       setIsReviewing(true)
@@ -693,8 +681,8 @@ function TuningPanel({
           type: 'multicopter',
           frame: 'quad_x',
         },
-        currentParams,
-        bounds,
+        currentParams: numericInputs.currentParams,
+        bounds: numericInputs.bounds,
         metrics: stableMetrics.metrics,
         proposal: stableProposal,
       })
@@ -706,7 +694,7 @@ function TuningPanel({
       setReviewError(
         error instanceof Error
           ? error.message
-          : 'Safety / AI Review 失败，请稍后重试�?',
+          : 'Safety / AI Review 失败，请稍后重试。',
       )
       setReviewErrorKey(requestKey)
     } finally {
@@ -750,10 +738,10 @@ function TuningPanel({
       </div>
 
       <p className="hint">
-        {'当前仅支持离线日志分析，不会写入飞控参数�?'}
+        {'当前仅支持离线日志分析，不会写入飞控参数。'}
       </p>
       {selectedLogId ? (
-        <p className="hint">{`当前关联日志�?${selectedLogId}`}</p>
+        <p className="hint">{`当前关联日志：${selectedLogId}`}</p>
       ) : (
         <p className="hint tuning-note">{'请先选择日志'}</p>
       )}
@@ -791,7 +779,7 @@ function TuningPanel({
       </div>
 
       <div className="tuning-section">
-        <h4 className="tuning-subtitle">{'分析片段（秒�?'}</h4>
+        <h4 className="tuning-subtitle">{'分析片段（秒）'}</h4>
         {tuningSegment.source === 'chart_selection' && segmentRequest.segment ? (
           <p className="hint">
             {`当前分析片段来自图表框选：${formatSegmentDisplayValue(segmentRequest.segment.startS ?? null)}s ~ ${formatSegmentDisplayValue(segmentRequest.segment.endS ?? null)}s`}
@@ -863,7 +851,7 @@ function TuningPanel({
 
       {loop === 'attitude' && (
         <p className="hint tuning-note">
-          {'attitude loop 暂仅支持指标分析，不生成自动参数建议�?'}
+          {'attitude loop 暂仅支持指标分析，不生成自动参数建议。'}
         </p>
       )}
 
@@ -926,7 +914,7 @@ function TuningPanel({
           disabled={!hasSelectedLog || isCalculatingMetrics}
           onClick={() => void handleCalculateMetrics()}
         >
-          {isCalculatingMetrics ? '计算�?...' : '计算跟随指标'}
+          {isCalculatingMetrics ? '计算中...' : '计算跟随指标'}
         </button>
         <button
           type="button"
@@ -934,7 +922,7 @@ function TuningPanel({
           disabled={!hasMetrics || isGeneratingProposal}
           onClick={() => void handleGenerateProposal()}
         >
-          {isGeneratingProposal ? '生成�?...' : '生成候选参�?'}
+          {isGeneratingProposal ? '生成中...' : '生成候选参数'}
         </button>
         <button
           type="button"
@@ -942,7 +930,7 @@ function TuningPanel({
           disabled={!hasProposal || isReviewing}
           onClick={() => void handleReviewProposal()}
         >
-          {isReviewing ? '审查�?...' : 'AI 审查建议'}
+          {isReviewing ? '审查中...' : 'AI 审查建议'}
         </button>
         <button
           type="button"
@@ -963,7 +951,7 @@ function TuningPanel({
       </div>
 
       {!hasMetrics ? <p className="hint">{'请先计算跟随指标'}</p> : null}
-      {!hasProposal ? <p className="hint">{'请先生成候选参�?'}</p> : null}
+      {!hasProposal ? <p className="hint">{'请先生成候选参数'}</p> : null}
       {!canExportParams && paramsExportHint ? (
         <p className="hint">{paramsExportHint}</p>
       ) : null}
@@ -986,7 +974,7 @@ function TuningPanel({
 
         {activeMetricsResult?.warnings.length ? (
           <div className="tuning-alert tuning-alert-warning" role="status">
-            <strong>{'注意�?'}</strong>
+            <strong>{'注意：'}</strong>
             <ul className="tuning-alert-list">
               {activeMetricsResult.warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
@@ -998,7 +986,7 @@ function TuningPanel({
         {hasActuatorRisk ? (
           <div className="tuning-alert tuning-alert-risk" role="status">
             {
-              '执行器饱和比例较高，后续调参规则应禁止增�? P/I/D 增益�?'
+              '执行器饱和比例较高，后续调参规则应禁止增加 P/I/D 增益。'
             }
           </div>
         ) : null}
@@ -1018,14 +1006,14 @@ function TuningPanel({
           </div>
         ) : (
           <p className="hint">
-            {'点击“计算跟随指标”后将在这里显示结果�?'}
+            {'点击“计算跟随指标”后将在这里显示结果。'}
           </p>
         )}
       </div>
 
       <div className="tuning-section">
         <div className="page-title-row">
-          <h4 className="tuning-subtitle">{'候�? PID 参数'}</h4>
+          <h4 className="tuning-subtitle">{'候选 PID 参数'}</h4>
           {activeProposalResult ? (
             <p className="hint-inline">
               {`状态：${PROPOSAL_STATUS_LABELS[activeProposalResult.status]}`}
@@ -1041,19 +1029,19 @@ function TuningPanel({
 
         {activeProposalResult?.status === 'rejected' ? (
           <div className="tuning-alert tuning-alert-risk" role="status">
-            {'当前数据不适合生成 PID 增益增加建议�?'}
+            {'当前数据不适合生成 PID 增益增加建议。'}
           </div>
         ) : null}
 
         {activeProposalResult?.status === 'no_change' ? (
           <div className="tuning-alert tuning-alert-info" role="status">
-            {'没有足够证据建议修改参数�?'}
+            {'没有足够证据建议修改参数。'}
           </div>
         ) : null}
 
         {activeProposalResult?.warnings.length ? (
           <div className="tuning-alert tuning-alert-warning" role="status">
-            <strong>{'注意�?'}</strong>
+            <strong>{'注意：'}</strong>
             <ul className="tuning-alert-list">
               {activeProposalResult.warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
@@ -1087,15 +1075,15 @@ function TuningPanel({
                         <p className="tuning-proposal-line">
                           <strong>{change.parameter}</strong>
                           <span>
-                            {`${formatProposalNumber(change.from)} �? ${formatProposalNumber(change.to)} (${formatPercentValue(change.changePercent)})`}
+                            {`${formatProposalNumber(change.from)} → ${formatProposalNumber(change.to)} (${formatPercentValue(change.changePercent)})`}
                           </span>
                         </p>
-                        <p className="hint">{`原因�?${change.reason}`}</p>
+                        <p className="hint">{`原因：${change.reason}`}</p>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="hint">{'当前没有新的参数调整建议�?'}</p>
+                  <p className="hint">{'当前没有新的参数调整建议。'}</p>
                 )}
               </div>
 
@@ -1109,19 +1097,19 @@ function TuningPanel({
                           <strong>{item.parameter}</strong>
                           <span>{formatProposalNumber(item.value)}</span>
                         </p>
-                        <p className="hint">{`原因�?${item.reason}`}</p>
+                        <p className="hint">{`原因：${item.reason}`}</p>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="hint">{'当前没有保持不变的参数条目�?'}</p>
+                  <p className="hint">{'当前没有保持不变的参数条目。'}</p>
                 )}
               </div>
             </div>
           </>
         ) : (
           <p className="hint">
-            {'点击“生成候选参数”后将在这里显示候�? PID 结果�?'}
+            {'点击“生成候选参数”后将在这里显示候选 PID 结果。'}
           </p>
         )}
       </div>
@@ -1131,7 +1119,7 @@ function TuningPanel({
           <h4 className="tuning-subtitle">{'Safety / AI Review'}</h4>
           {activeReviewResult ? (
             <p className="hint-inline">
-              {`状态：${REVIEW_STATUS_LABELS[activeReviewResult.reviewStatus]} / 风险�?${RISK_LEVEL_LABELS[activeReviewResult.riskLevel]}`}
+              {`状态：${REVIEW_STATUS_LABELS[activeReviewResult.reviewStatus]} / 风险：${RISK_LEVEL_LABELS[activeReviewResult.riskLevel]}`}
             </p>
           ) : null}
         </div>
@@ -1171,7 +1159,7 @@ function TuningPanel({
                     ))}
                   </div>
                 ) : (
-                  <p className="hint">{'当前没有额外 concern�?'}</p>
+                  <p className="hint">{'当前没有额外 concerns。'}</p>
                 )}
               </div>
 
@@ -1186,14 +1174,14 @@ function TuningPanel({
                     ))}
                   </div>
                 ) : (
-                  <p className="hint">{'当前没有额外 recommendation�?'}</p>
+                  <p className="hint">{'当前没有额外 recommendations。'}</p>
                 )}
               </div>
             </div>
 
             {activeReviewResult.warnings.length ? (
               <div className="tuning-alert tuning-alert-warning" role="status">
-                <strong>{'注意�?'}</strong>
+                <strong>{'注意：'}</strong>
                 <ul className="tuning-alert-list">
                   {activeReviewResult.warnings.map((warning) => (
                     <li key={warning}>{warning}</li>
@@ -1204,14 +1192,14 @@ function TuningPanel({
           </>
         ) : (
           <p className="hint">
-            {'点击“AI 审查建议”后将在这里显示 Safety / AI Review 结果�?'}
+            {'点击“AI 审查建议”后将在这里显示 Safety / AI Review 结果。'}
           </p>
         )}
       </div>
 
       <p className="hint">
         {
-          '当前版本仅接入离线指标计算、保守候选参数生成、Safety / AI Review、Markdown 报告导出与受�? PX4 参数文件导出，不包含自动写入飞控�?'
+          '当前版本仅接入离线指标计算、保守候选参数生成、Safety / AI Review、Markdown 报告导出与受限 PX4 参数文件导出，不包含自动写入飞控。'
         }
       </p>
     </section>

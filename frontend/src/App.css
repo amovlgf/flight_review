@@ -65,6 +65,19 @@
   margin-bottom: 10px;
 }
 
+.chart-view-toolbar {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 12px;
+}
+
+.chart-view-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+
 .button {
   border: 1px solid #cfd8e3;
   background: #eef2f7;

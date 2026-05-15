@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import ChartPanel from './components/ChartPanel'
 import type {
@@ -14,6 +14,7 @@ import TuningPanel from './components/TuningPanel'
 import UploadPanel from './components/UploadPanel'
 import { fetchChartData, fetchLogList, uploadLogFile } from './services/api'
 import type { TuningSegmentState } from './types/tuning'
+import { buildPidAttitudeTrackingCharts } from './utils/pidAttitudeTracking'
 
 type ChartAction = {
   type: string
@@ -42,6 +43,7 @@ type ChartRegistryItem = {
 }
 
 type ViewMode = 'upload' | 'chart'
+type ChartViewMode = 'pid' | 'normal'
 
 const PAGE_SIZE = 8
 const DEFAULT_TUNING_SEGMENT: TuningSegmentState = {
@@ -49,11 +51,6 @@ const DEFAULT_TUNING_SEGMENT: TuningSegmentState = {
   endS: null,
   source: 'default',
 }
-const ROLE_OPTIONS = [
-  { value: 'customer', label: '\u5ba2\u6237\u89c6\u56fe' },
-  { value: 'aftersales', label: '\u552e\u540e\u89c6\u56fe' },
-  { value: 'engineer', label: '\u7814\u53d1\u89c6\u56fe' },
-]
 
 function clampPercent(value: number) {
   return Math.min(Math.max(value, 0), 100)
@@ -102,11 +99,49 @@ function App() {
   const [listPage, setListPage] = useState(1)
   const [listPageCount, setListPageCount] = useState(1)
   const [listTotal, setListTotal] = useState(0)
-  const [viewRole, setViewRole] = useState('aftersales')
   const [viewMode, setViewMode] = useState<ViewMode>('upload')
+  const [chartViewMode, setChartViewMode] = useState<ChartViewMode>('pid')
   const [tuningSegment, setTuningSegment] = useState<TuningSegmentState>(
     DEFAULT_TUNING_SEGMENT,
   )
+
+  const visibleTopicCharts = useMemo(
+    () =>
+      chartViewMode === 'pid'
+        ? buildPidAttitudeTrackingCharts(topicCharts)
+        : topicCharts,
+    [chartViewMode, topicCharts],
+  )
+
+  const visibleSeriesData = useMemo(
+    () => (chartViewMode === 'normal' ? seriesData : []),
+    [chartViewMode, seriesData],
+  )
+
+  const visibleDiagnostics = useMemo(
+    () => (chartViewMode === 'normal' ? diagnostics : []),
+    [chartViewMode, diagnostics],
+  )
+
+  const chartViewDescription = useMemo(
+    () =>
+      chartViewMode === 'pid'
+        ? '\u5f53\u524d PID \u89c6\u56fe\u4ec5\u663e\u793a roll / pitch / yaw \u4e09\u8f74\u7684\u671f\u671b\u89d2\u5ea6\u4e0e\u5b9e\u9645\u89d2\u5ea6\u8ddf\u968f\u66f2\u7ebf\u3002'
+        : '\u5f53\u524d\u663e\u793a\u65e5\u5fd7\u4e2d\u7684\u5e38\u89c4\u56fe\u8868\u6570\u636e\uff0c\u540e\u7eed\u5c06\u7ee7\u7eed\u4f18\u5316\u5206\u7c7b\u4e0e\u5e03\u5c40\u3002',
+    [chartViewMode],
+  )
+
+  const chartEmptyStateMessage = useMemo(() => {
+    if (
+      activeLogMeta &&
+      chartViewMode === 'pid' &&
+      visibleTopicCharts.length === 0
+    ) {
+      return '\u5f53\u524d\u65e5\u5fd7\u7f3a\u5c11\u59ff\u6001\u6216\u59ff\u6001\u671f\u671b\u56db\u5143\u6570\u6570\u636e\uff0c\u65e0\u6cd5\u751f\u6210 PID \u89d2\u5ea6\u8ddf\u968f\u89c6\u56fe\u3002\u53ef\u5207\u6362\u5230\u5e38\u89c4\u89c6\u56fe\u67e5\u770b\u539f\u59cb\u6570\u636e\u3002'
+    }
+
+    return undefined
+  }, [activeLogMeta, chartViewMode, visibleTopicCharts])
 
   const loadLogList = async (options?: {
     preferLogId?: string
@@ -232,7 +267,7 @@ function App() {
     if (!selectedLogId) return
 
     try {
-      const data = await fetchChartData(selectedLogId, viewRole)
+      const data = await fetchChartData(selectedLogId)
       if (Array.isArray(data?.series) && data.series.length === 0) {
         setSeriesData([])
         setTopicCharts([])
@@ -317,16 +352,6 @@ function App() {
   const handleNextPage = async () => {
     if (listPage >= listPageCount) return
     await loadLogList({ page: listPage + 1 })
-  }
-
-  const handleRoleChange = (role: string) => {
-    setViewRole(role)
-    setSeriesData([])
-    setTopicCharts([])
-    setDiagnostics([])
-    setActiveLogMeta(null)
-    setTuningSegment(DEFAULT_TUNING_SEGMENT)
-    setChartHint('\u89c6\u56fe\u89d2\u8272\u5df2\u5207\u6362\uff0c\u8bf7\u91cd\u65b0\u6253\u5f00\u56fe\u8868\u6a21\u5757\u3002')
   }
 
   const syncChartZoom = useCallback((
@@ -639,14 +664,11 @@ function App() {
             </ul>
             <LogSelector
               selectedLogId={selectedLogId}
-              viewRole={viewRole}
-              roleOptions={ROLE_OPTIONS}
               searchKeyword={searchKeyword}
               logList={logList}
               listPage={listPage}
               listPageCount={listPageCount}
               listTotal={listTotal}
-              onRoleChange={handleRoleChange}
               onSearchKeywordChange={setSearchKeyword}
               onSearch={handleSearch}
               onLogSelect={handleLogSelect}
@@ -660,13 +682,38 @@ function App() {
               tuningSegment={tuningSegment}
               onTuningSegmentChange={setTuningSegment}
             />
+            <div className="chart-view-toolbar">
+              <div className="chart-view-row">
+                <label className="tuning-field" htmlFor="chart-view-mode">
+                  <span className="tuning-subtitle">
+                    {'\u56fe\u8868\u663e\u793a\u6a21\u5f0f\uff1a'}
+                  </span>
+                  <select
+                    id="chart-view-mode"
+                    className="select"
+                    value={chartViewMode}
+                    onChange={(event) =>
+                      setChartViewMode(event.target.value as ChartViewMode)
+                    }
+                  >
+                    <option value="pid">
+                      {'PID \u89c6\u56fe'}
+                    </option>
+                    <option value="normal">{'\u5e38\u89c4\u89c6\u56fe'}</option>
+                  </select>
+                </label>
+              </div>
+              <p className="hint">{chartViewDescription}</p>
+            </div>
             <ChartPanel
               activeLogMeta={activeLogMeta}
-              topicCharts={topicCharts}
-              seriesData={seriesData}
+              topicCharts={visibleTopicCharts}
+              seriesData={visibleSeriesData}
               modeSegments={modeSegments}
-              diagnostics={diagnostics}
+              diagnostics={visibleDiagnostics}
               chartHint={chartHint}
+              emptyStateMessage={chartEmptyStateMessage}
+              showDefaultSeriesFallback={chartViewMode === 'normal'}
               onChartReady={bindChartInteractions}
               onChartDispose={handleChartDispose}
             />

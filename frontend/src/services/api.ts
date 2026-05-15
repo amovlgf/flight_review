@@ -33,12 +33,12 @@ export async function uploadLogFile(file: File): Promise<UploadLogResponse> {
 
 export async function fetchChartData(
   logId: string,
-  role: string,
+  role?: string,
 ): Promise<ChartDataResponse> {
-  const query = new URLSearchParams({
-    logId,
-    role,
-  })
+  const query = new URLSearchParams({ logId })
+  if (role) {
+    query.set('role', role)
+  }
   const response = await fetch(
     `${API_BASE_URL}/logs/chart-data?${query.toString()}`,
   )

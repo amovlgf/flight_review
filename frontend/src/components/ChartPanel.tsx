@@ -45,6 +45,8 @@ type ChartPanelProps = {
   modeSegments: ModeSegment[]
   diagnostics: DiagnosticItem[]
   chartHint: string
+  emptyStateMessage?: string
+  showDefaultSeriesFallback?: boolean
   onChartReady: (
     chartKey: string,
     instance: unknown,
@@ -142,9 +144,7 @@ const ChartCard = memo(function ChartCard({
       return {
         option: null,
         error:
-          error instanceof Error
-            ? error.message
-            : '图表配置构建失败。',
+          error instanceof Error ? error.message : '图表配置构建失败。',
       }
     }
   }, [chartId, modeSegments, title, visibleSeries])
@@ -194,10 +194,10 @@ const ChartCard = memo(function ChartCard({
 
       {chartOptionState.error ? (
         <div className="chart-placeholder">
-          {`该 topic 图表配置失败：${chartOptionState.error}`}
+          {`该图表配置失败：${chartOptionState.error}`}
         </div>
       ) : visibleSeries.length === 0 ? (
-        <div className="chart-placeholder">{'当前 topic 暂无图表数据'}</div>
+        <div className="chart-placeholder">{'当前图表暂无可显示字段'}</div>
       ) : (
         <ReactECharts
           option={chartOptionState.option}
@@ -217,10 +217,14 @@ function ChartPanel({
   modeSegments,
   diagnostics,
   chartHint,
+  emptyStateMessage,
+  showDefaultSeriesFallback = true,
   onChartReady,
   onChartDispose,
 }: ChartPanelProps) {
-  const [selectedSeriesMap, setSelectedSeriesMap] = useState<SelectedSeriesMap>({})
+  const [selectedSeriesMap, setSelectedSeriesMap] = useState<SelectedSeriesMap>(
+    {},
+  )
 
   const handleSeriesToggle = useCallback(
     (chartId: string, series: ChartSeries[], seriesKey: string) => {
@@ -255,11 +259,13 @@ function ChartPanel({
     [selectedSeriesMap, topicCharts],
   )
 
-  const emptyStateMessage = activeLogMeta
-    ? '暂无可展示 topic'
-    : chartHint && chartHint !== '图表组件占位区'
-      ? chartHint
-      : '暂无图表数据'
+  const resolvedEmptyStateMessage =
+    emptyStateMessage ||
+    (activeLogMeta
+      ? '暂无可展示图表'
+      : chartHint && chartHint !== '图表组件占位区'
+        ? chartHint
+        : '暂无图表数据')
 
   return (
     <>
@@ -288,7 +294,7 @@ function ChartPanel({
             />
           ))}
         </div>
-      ) : seriesData.length > 0 ? (
+      ) : showDefaultSeriesFallback && seriesData.length > 0 ? (
         <ChartCard
           key="default"
           chartId="default"
@@ -301,7 +307,7 @@ function ChartPanel({
           onToggleSeries={handleSeriesToggle}
         />
       ) : (
-        <div className="chart-placeholder">{emptyStateMessage}</div>
+        <div className="chart-placeholder">{resolvedEmptyStateMessage}</div>
       )}
       <DiagnosticsPanel diagnostics={diagnostics} />
     </>

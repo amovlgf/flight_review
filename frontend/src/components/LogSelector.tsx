@@ -1,6 +1,3 @@
-import RoleSwitcher from './RoleSwitcher'
-import type { RoleOption } from './RoleSwitcher'
-
 export type LogListItem = {
   logId: string
   fileName: string
@@ -9,14 +6,11 @@ export type LogListItem = {
 
 type LogSelectorProps = {
   selectedLogId: string
-  viewRole: string
-  roleOptions: RoleOption[]
   searchKeyword: string
   logList: LogListItem[]
   listPage: number
   listPageCount: number
   listTotal: number
-  onRoleChange: (role: string) => void
   onSearchKeywordChange: (keyword: string) => void
   onSearch: () => void
   onLogSelect: (logId: string) => void
@@ -28,14 +22,11 @@ type LogSelectorProps = {
 
 function LogSelector({
   selectedLogId,
-  viewRole,
-  roleOptions,
   searchKeyword,
   logList,
   listPage,
   listPageCount,
   listTotal,
-  onRoleChange,
   onSearchKeywordChange,
   onSearch,
   onLogSelect,
@@ -47,11 +38,6 @@ function LogSelector({
   return (
     <>
       <div className="actions">
-        <RoleSwitcher
-          value={viewRole}
-          options={roleOptions}
-          onChange={onRoleChange}
-        />
         <input
           className="input"
           value={searchKeyword}
