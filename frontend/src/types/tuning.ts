@@ -31,6 +31,35 @@ export type TuningSegmentState = {
   source: TuningSegmentSource
 }
 
+export type TuningSeriesPoint = {
+  timeS: number
+  value: number
+}
+
+export type TuningSegmentQualityStatus =
+  | 'good'
+  | 'warning'
+  | 'bad'
+  | 'unknown'
+
+export type TuningSegmentQualityMetrics = {
+  durationS: number | null
+  setpointRangeDeg: number | null
+  actualRangeDeg: number | null
+  sampleCount: number
+  rmsErrorDeg: number | null
+  peakErrorDeg: number | null
+}
+
+export type TuningSegmentQualityResult = {
+  status: TuningSegmentQualityStatus
+  score: number
+  summary: string
+  reasons: string[]
+  recommendations: string[]
+  metrics: TuningSegmentQualityMetrics
+}
+
 export type TuningMetrics = {
   trackingErrorRms: number
   trackingErrorPeak: number

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { TopicChart } from '../types/log'
-import { buildPidAttitudeTrackingCharts } from './pidAttitudeTracking'
+import {
+  buildPidAttitudeTrackingCharts,
+  getPidAxisTrackingSeries,
+} from './pidAttitudeTracking'
 
 function buildQuaternionPoints(
   points: Array<[number, [number, number, number, number]]>,
@@ -272,5 +275,102 @@ describe('pidAttitudeTracking', () => {
     expect(charts[0]?.series[1]?.points).toEqual([[0, 10]])
     expect(charts[1]?.series[1]?.points).toEqual([[0, 5]])
     expect(charts[2]?.series[1]?.points).toEqual([[0, -2]])
+  })
+
+  it('prefers derived actual Euler fields over quaternion-derived values when both exist', () => {
+    const topicCharts: TopicChart[] = [
+      {
+        topic: 'vehicle_attitude',
+        title: 'vehicle_attitude',
+        series: [
+          ...buildQuaternionPoints([[0, [1, 0, 0, 0]]]),
+          { name: 'roll', unit: 'deg', points: [[0, 42]] },
+          { name: 'pitch', unit: 'deg', points: [[0, -3]] },
+          { name: 'yaw', unit: 'deg', points: [[0, 11]] },
+        ],
+      },
+      {
+        topic: 'vehicle_attitude_setpoint',
+        title: 'vehicle_attitude_setpoint',
+        series: buildQuaternionPoints([[0, [1, 0, 0, 0]]], 'q_d'),
+      },
+    ]
+
+    const charts = buildPidAttitudeTrackingCharts(topicCharts)
+
+    expect(charts[0]?.series[0]?.points).toEqual([[0, 42]])
+    expect(charts[1]?.series[0]?.points).toEqual([[0, -3]])
+    expect(charts[2]?.series[0]?.points).toEqual([[0, 11]])
+  })
+
+  it('prefers derived setpoint Euler fields over quaternion-derived values when both exist', () => {
+    const topicCharts: TopicChart[] = [
+      {
+        topic: 'vehicle_attitude',
+        title: 'vehicle_attitude',
+        series: buildQuaternionPoints([[0, [1, 0, 0, 0]]]),
+      },
+      {
+        topic: 'vehicle_attitude_setpoint',
+        title: 'vehicle_attitude_setpoint',
+        series: [
+          ...buildQuaternionPoints([[0, [1, 0, 0, 0]]], 'q_d'),
+          { name: 'roll_sp', unit: 'deg', points: [[0, 9]] },
+          { name: 'pitch_sp', unit: 'deg', points: [[0, -7]] },
+          { name: 'yaw_sp', unit: 'deg', points: [[0, 18]] },
+        ],
+      },
+    ]
+
+    const charts = buildPidAttitudeTrackingCharts(topicCharts)
+
+    expect(charts[0]?.series[1]?.points).toEqual([[0, 9]])
+    expect(charts[1]?.series[1]?.points).toEqual([[0, -7]])
+    expect(charts[2]?.series[1]?.points).toEqual([[0, 18]])
+  })
+
+  it('extracts roll actual and setpoint series from PID tracking charts', () => {
+    const charts = buildPidAttitudeTrackingCharts([
+      {
+        topic: 'vehicle_attitude',
+        title: 'vehicle_attitude',
+        series: buildQuaternionPoints([[0, [1, 0, 0, 0]]]),
+      },
+      {
+        topic: 'vehicle_attitude_setpoint',
+        title: 'vehicle_attitude_setpoint',
+        series: buildQuaternionPoints([[0, [1, 0, 0, 0]]], 'q_d'),
+      },
+    ])
+
+    const result = getPidAxisTrackingSeries(charts, 'roll')
+
+    expect(result.actualSeries).toEqual([{ timeS: 0, value: 0 }])
+    expect(result.setpointSeries).toEqual([{ timeS: 0, value: 0 }])
+  })
+
+  it('extracts pitch and yaw tracking series safely', () => {
+    const charts = buildPidAttitudeTrackingCharts([
+      {
+        topic: 'vehicle_attitude',
+        title: 'vehicle_attitude',
+        series: buildQuaternionPoints([[0, [1, 0, 0, 0]]]),
+      },
+      {
+        topic: 'vehicle_attitude_setpoint',
+        title: 'vehicle_attitude_setpoint',
+        series: buildQuaternionPoints([[0, [1, 0, 0, 0]]], 'q_d'),
+      },
+    ])
+
+    expect(getPidAxisTrackingSeries(charts, 'pitch').actualSeries).toHaveLength(1)
+    expect(getPidAxisTrackingSeries(charts, 'yaw').setpointSeries).toHaveLength(1)
+  })
+
+  it('returns empty arrays when the expected tracking series are missing', () => {
+    expect(getPidAxisTrackingSeries([], 'roll')).toEqual({
+      actualSeries: [],
+      setpointSeries: [],
+    })
   })
 })

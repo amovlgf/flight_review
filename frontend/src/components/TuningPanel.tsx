@@ -19,6 +19,8 @@ import type {
   TuningReviewResponse,
   TuningRiskLevel,
   TuningSafetyBounds,
+  TuningSegmentQualityResult,
+  TuningSegmentQualityStatus,
   TuningSegment,
   TuningSegmentState,
 } from '../types/tuning'
@@ -35,7 +37,10 @@ import {
 
 type TuningPanelProps = {
   selectedLogId?: string
+  axis: TuningAxis
+  onAxisChange: (axis: TuningAxis) => void
   tuningSegment: TuningSegmentState
+  segmentQuality: TuningSegmentQualityResult
   onTuningSegmentChange: (segment: TuningSegmentState) => void
 }
 
@@ -146,6 +151,13 @@ const RISK_LEVEL_LABELS = {
   medium: '中风险',
   high: '高风险',
 } as const
+
+const SEGMENT_QUALITY_LABELS: Record<TuningSegmentQualityStatus, string> = {
+  good: '良好',
+  warning: '一般',
+  bad: '不适合分析',
+  unknown: '暂无',
+}
 
 function formatMetricValue(
   value: number | null,
@@ -374,6 +386,21 @@ function getRiskAlertClass(riskLevel: TuningRiskLevel) {
   return 'tuning-alert-info'
 }
 
+function getSegmentQualityClass(status: TuningSegmentQualityStatus) {
+  if (status === 'good') return 'tuning-alert-success'
+  if (status === 'warning') return 'tuning-alert-warning'
+  if (status === 'bad') return 'tuning-alert-error'
+  return 'tuning-alert-muted'
+}
+
+function formatQualityMetric(value: number | null, digits = 2, suffix = '') {
+  if (value === null || !Number.isFinite(value)) {
+    return '暂无数据'
+  }
+
+  return `${value.toFixed(digits).replace(/\.?0+$/, '')}${suffix}`
+}
+
 function buildReportFilename(axis: TuningAxis, loop: TuningLoop) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   return `px4_pid_tuning_report_${axis}_${loop}_${timestamp}.md`
@@ -386,10 +413,12 @@ function buildParamsFilename(axis: TuningAxis, loop: TuningLoop) {
 
 function TuningPanel({
   selectedLogId,
+  axis,
+  onAxisChange,
   tuningSegment,
+  segmentQuality,
   onTuningSegmentChange,
 }: TuningPanelProps) {
-  const [axis, setAxis] = useState<TuningAxis>('roll')
   const [loop, setLoop] = useState<TuningLoop>('rate')
   const [pidValues, setPidValues] = useState<TuningPidValues>(createEmptyPidValues)
   const [safetyBounds, setSafetyBounds] = useState<TuningSafetyBounds>(
@@ -752,7 +781,7 @@ function TuningPanel({
           <select
             className="select tuning-select"
             value={axis}
-            onChange={(event) => setAxis(event.target.value as TuningAxis)}
+            onChange={(event) => onAxisChange(event.target.value as TuningAxis)}
           >
             {AXIS_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -824,6 +853,48 @@ function TuningPanel({
               placeholder="默认"
             />
           </label>
+        </div>
+
+        <div
+          className={`tuning-alert ${getSegmentQualityClass(segmentQuality.status)}`}
+          role="status"
+        >
+          <p className="tuning-quality-line">
+            <strong>{`片段质量：${SEGMENT_QUALITY_LABELS[segmentQuality.status]}`}</strong>
+            <span>{`评分：${segmentQuality.score} / 100`}</span>
+          </p>
+          <p className="hint">{segmentQuality.summary}</p>
+
+          {segmentQuality.reasons.length ? (
+            <div className="tuning-quality-block">
+              <span className="series-selector-label">原因</span>
+              <ul className="tuning-alert-list">
+                {segmentQuality.reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {segmentQuality.recommendations.length ? (
+            <div className="tuning-quality-block">
+              <span className="series-selector-label">建议</span>
+              <ul className="tuning-alert-list">
+                {segmentQuality.recommendations.map((recommendation) => (
+                  <li key={recommendation}>{recommendation}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <div className="tuning-quality-metrics">
+            <span>{`时长：${formatQualityMetric(segmentQuality.metrics.durationS, 2, ' s')}`}</span>
+            <span>{`Setpoint 变化：${formatQualityMetric(segmentQuality.metrics.setpointRangeDeg, 2, ' deg')}`}</span>
+            <span>{`Actual 变化：${formatQualityMetric(segmentQuality.metrics.actualRangeDeg, 2, ' deg')}`}</span>
+            <span>{`数据点：${segmentQuality.metrics.sampleCount}`}</span>
+            <span>{`RMS Error：${formatQualityMetric(segmentQuality.metrics.rmsErrorDeg, 2, ' deg')}`}</span>
+            <span>{`Peak Error：${formatQualityMetric(segmentQuality.metrics.peakErrorDeg, 2, ' deg')}`}</span>
+          </div>
         </div>
       </div>
 

@@ -7,6 +7,7 @@ import {
   getSeriesDisplayName,
   getSeriesTimeBounds,
 } from '../utils/chartOptions'
+import type { NormalizedSelectionBox } from '../utils/selectionBox'
 
 type ChartPoint = [number, number]
 
@@ -38,12 +39,19 @@ export type ModeSegment = {
   color: string
 }
 
+export type ChartSelectionPreview = NormalizedSelectionBox & {
+  chartId: string
+}
+
 type ChartPanelProps = {
   activeLogMeta: ActiveLogMeta | null
   topicCharts: TopicChart[]
   seriesData: ChartSeries[]
   modeSegments: ModeSegment[]
   diagnostics: DiagnosticItem[]
+  selectionBox?: ChartSelectionPreview | null
+  activeChartTopic?: string
+  activeChartBadgeLabel?: string
   chartHint: string
   emptyStateMessage?: string
   showDefaultSeriesFallback?: boolean
@@ -59,10 +67,14 @@ type SelectedSeriesMap = Record<string, string[]>
 
 type ChartCardProps = {
   chartId: string
+  topic: string
   title: string
   series: ChartSeries[]
   modeSegments: ModeSegment[]
   selectedKeys?: string[]
+  selectionBox?: NormalizedSelectionBox | null
+  isActive?: boolean
+  activeBadgeLabel?: string
   onChartReady: (
     chartKey: string,
     instance: unknown,
@@ -111,10 +123,14 @@ function buildChartId(topicChart: TopicChart, index: number) {
 
 const ChartCard = memo(function ChartCard({
   chartId,
+  topic,
   title,
   series,
   modeSegments,
   selectedKeys,
+  selectionBox,
+  isActive = false,
+  activeBadgeLabel,
   onChartReady,
   onChartDispose,
   onToggleSeries,
@@ -170,8 +186,16 @@ const ChartCard = memo(function ChartCard({
   }, [chartId, onChartDispose])
 
   return (
-    <div className="chart-wrap">
-      <h3 className="topic-title">{title}</h3>
+    <div
+      className={`chart-wrap${isActive ? ' chart-wrap-active' : ''}`}
+      data-topic={topic}
+    >
+      <div className="topic-title-row">
+        <h3 className="topic-title">{title}</h3>
+        {isActive && activeBadgeLabel ? (
+          <span className="topic-title-badge">{activeBadgeLabel}</span>
+        ) : null}
+      </div>
 
       {series.length > 0 ? (
         <div className="series-selector">
@@ -199,12 +223,25 @@ const ChartCard = memo(function ChartCard({
       ) : visibleSeries.length === 0 ? (
         <div className="chart-placeholder">{'当前图表暂无可显示字段'}</div>
       ) : (
-        <ReactECharts
-          option={chartOptionState.option}
-          lazyUpdate
-          style={{ height: 360 }}
-          onChartReady={handleChartReady}
-        />
+        <div className="chart-canvas-shell">
+          <ReactECharts
+            option={chartOptionState.option}
+            lazyUpdate
+            style={{ height: 360 }}
+            onChartReady={handleChartReady}
+          />
+          {selectionBox ? (
+            <div
+              className="chart-selection-box"
+              style={{
+                left: selectionBox.left,
+                top: selectionBox.top,
+                width: selectionBox.width,
+                height: selectionBox.height,
+              }}
+            />
+          ) : null}
+        </div>
       )}
     </div>
   )
@@ -216,6 +253,9 @@ function ChartPanel({
   seriesData,
   modeSegments,
   diagnostics,
+  selectionBox,
+  activeChartTopic,
+  activeChartBadgeLabel,
   chartHint,
   emptyStateMessage,
   showDefaultSeriesFallback = true,
@@ -251,12 +291,17 @@ function ChartPanel({
         const chartId = buildChartId(topicChart, index)
         return {
           chartId,
+          topic: topicChart.topic,
           title: topicChart.title,
           series: topicChart.series,
           selectedKeys: selectedSeriesMap[chartId],
+          isActive:
+            typeof activeChartTopic === 'string' &&
+            activeChartTopic.length > 0 &&
+            topicChart.topic === activeChartTopic,
         }
       }),
-    [selectedSeriesMap, topicCharts],
+    [activeChartTopic, selectedSeriesMap, topicCharts],
   )
 
   const resolvedEmptyStateMessage =
@@ -284,10 +329,16 @@ function ChartPanel({
             <ChartCard
               key={item.chartId}
               chartId={item.chartId}
+              topic={item.topic}
               title={item.title}
               series={item.series}
               modeSegments={modeSegments}
               selectedKeys={item.selectedKeys}
+              selectionBox={
+                selectionBox?.chartId === item.chartId ? selectionBox : null
+              }
+              isActive={item.isActive}
+              activeBadgeLabel={activeChartBadgeLabel}
               onChartReady={onChartReady}
               onChartDispose={onChartDispose}
               onToggleSeries={handleSeriesToggle}
@@ -298,10 +349,14 @@ function ChartPanel({
         <ChartCard
           key="default"
           chartId="default"
+          topic="default"
           title="默认图表"
           series={seriesData}
           modeSegments={modeSegments}
           selectedKeys={selectedSeriesMap.default}
+          selectionBox={
+            selectionBox?.chartId === 'default' ? selectionBox : null
+          }
           onChartReady={onChartReady}
           onChartDispose={onChartDispose}
           onToggleSeries={handleSeriesToggle}

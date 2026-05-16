@@ -12,8 +12,56 @@ export type ChartTimeBounds = {
   hasData: boolean
 }
 
+const DEFAULT_CHART_COLORS = [
+  '#1d4ed8',
+  '#f97316',
+  '#059669',
+  '#7c3aed',
+  '#dc2626',
+  '#0891b2',
+  '#ca8a04',
+  '#475569',
+]
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+function getSeriesVisualStyle(name: string, index: number) {
+  const normalizedName = name.trim().toLowerCase()
+  const isSetpoint =
+    normalizedName.includes('setpoint') ||
+    normalizedName.endsWith('_sp') ||
+    normalizedName.includes('desired') ||
+    normalizedName.includes('target')
+  const isActual =
+    normalizedName.includes('actual') ||
+    ['roll', 'pitch', 'yaw'].includes(normalizedName)
+
+  if (isSetpoint) {
+    return {
+      color: '#f97316',
+      width: 2.4,
+      type: 'solid' as const,
+      opacity: 0.98,
+    }
+  }
+
+  if (isActual) {
+    return {
+      color: '#1d4ed8',
+      width: 2.75,
+      type: 'solid' as const,
+      opacity: 0.98,
+    }
+  }
+
+  return {
+    color: DEFAULT_CHART_COLORS[index % DEFAULT_CHART_COLORS.length],
+    width: 2.2,
+    type: 'solid' as const,
+    opacity: 0.96,
+  }
 }
 
 function normalizeSeriesPoints(points: unknown): Array<[number, number]> {
@@ -157,6 +205,8 @@ export function buildTopicChartOption(
   const minModeLabelDuration = Math.max(5, chartTimeRange * 0.08)
 
   return {
+    backgroundColor: '#f7f9fc',
+    color: DEFAULT_CHART_COLORS,
     tooltip: { trigger: 'axis' },
     toolbox: {
       orient: 'vertical',
@@ -176,6 +226,9 @@ export function buildTopicChartOption(
     legend: {
       type: 'scroll',
       top: 8,
+      textStyle: {
+        color: '#334155',
+      },
       data: normalizedSeries.map(
         (item) => `${getSeriesDisplayName(item.name)} (${item.unit})`,
       ),
@@ -186,12 +239,32 @@ export function buildTopicChartOption(
       name: '\u65f6\u95f4 (s)',
       nameGap: 28,
       axisLabel: { margin: 12 },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(148, 163, 184, 0.22)',
+        },
+      },
+      axisLine: {
+        lineStyle: {
+          color: '#64748b',
+        },
+      },
     },
     yAxis: {
       type: 'value',
       name: '\u6570\u503c',
       nameGap: 22,
       axisLabel: { margin: 10 },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(148, 163, 184, 0.22)',
+        },
+      },
+      axisLine: {
+        lineStyle: {
+          color: '#64748b',
+        },
+      },
     },
     dataZoom: [
       {
@@ -207,41 +280,60 @@ export function buildTopicChartOption(
         height: 18,
       },
     ],
-    series: normalizedSeries.map((item, idx) => ({
-      name: `${getSeriesDisplayName(item.name)} (${item.unit})`,
-      type: 'line',
-      smooth: false,
-      showSymbol: false,
-      data: item.points,
-      markArea:
-        idx === 0 && normalizedModeSegments.length > 0
-          ? {
-              silent: true,
-              label: {
-                show: true,
-                position: 'insideTop',
-                color: '#334155',
-                fontSize: 10,
-                width: 72,
-                overflow: 'truncate',
-              },
-              itemStyle: {
-                opacity: 0.1,
-              },
-              data: normalizedModeSegments.map((seg) => [
-                {
-                  name:
-                    seg.end - seg.start >= minModeLabelDuration ? seg.mode : '',
-                  xAxis: seg.start,
-                  itemStyle: {
-                    color: seg.color || '#94a3b8',
-                    opacity: 0.12,
-                  },
+    series: normalizedSeries.map((item, idx) => {
+      const visualStyle = getSeriesVisualStyle(item.name, idx)
+
+      return {
+        name: `${getSeriesDisplayName(item.name)} (${item.unit})`,
+        type: 'line',
+        smooth: false,
+        showSymbol: false,
+        data: item.points,
+        lineStyle: {
+          color: visualStyle.color,
+          width: visualStyle.width,
+          type: visualStyle.type,
+          opacity: visualStyle.opacity,
+        },
+        itemStyle: {
+          color: visualStyle.color,
+        },
+        emphasis: {
+          focus: 'series',
+          lineStyle: {
+            width: visualStyle.width + 0.6,
+          },
+        },
+        markArea:
+          idx === 0 && normalizedModeSegments.length > 0
+            ? {
+                silent: true,
+                label: {
+                  show: true,
+                  position: 'insideTop',
+                  color: '#334155',
+                  fontSize: 10,
+                  width: 72,
+                  overflow: 'truncate',
                 },
-                { xAxis: seg.end },
-              ]),
-            }
-          : undefined,
-    })),
+                itemStyle: {
+                  opacity: 0.1,
+                },
+                data: normalizedModeSegments.map((seg) => [
+                  {
+                    name:
+                      seg.end - seg.start >= minModeLabelDuration ? seg.mode : '',
+                    xAxis: seg.start,
+                    itemStyle: {
+                      color: seg.color || '#94a3b8',
+                      opacity: 0.12,
+                    },
+                  },
+                  { xAxis: seg.end },
+                ]),
+              }
+            : undefined,
+      }
+    }),
   }
 }

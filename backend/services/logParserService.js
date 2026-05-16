@@ -9,6 +9,8 @@ const {
   buildFallbackTopicCharts,
 } = require('./fallbackDataService');
 
+const PYTHON_PARSER_MAX_BUFFER_BYTES = 1024 * 1024 * 256;
+
 function buildDiagnostics(seriesMap) {
   const altitudeValues = seriesMap.altitude.map((item) => item[1]);
   const speedValues = seriesMap.speed.map((item) => item[1]);
@@ -103,7 +105,7 @@ function parsePx4Series(filePath) {
     ['-X', 'utf8', parserScriptPath, filePath],
     {
       encoding: 'utf8',
-      maxBuffer: 1024 * 1024 * 64,
+      maxBuffer: PYTHON_PARSER_MAX_BUFFER_BYTES,
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );

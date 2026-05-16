@@ -1,3 +1,4 @@
+import type { TuningAxis, TuningSeriesPoint } from '../types/tuning'
 import type { ChartSeries, TopicChart } from '../types/log'
 import { quaternionToEulerDeg } from './attitudeEuler'
 
@@ -201,8 +202,8 @@ function extractEulerSeriesFromDerivedFields(
 function extractActualEulerSeries(topicCharts: TopicChart[]): EulerSeriesMap | null {
   const actualTopic = findTopicChart(topicCharts, ACTUAL_TOPIC_FAMILY)
   return (
-    extractEulerSeriesFromQuaternions(actualTopic, ACTUAL_QUATERNION_CANDIDATES) ??
-    extractEulerSeriesFromDerivedFields(actualTopic, ACTUAL_EULER_CANDIDATES)
+    extractEulerSeriesFromDerivedFields(actualTopic, ACTUAL_EULER_CANDIDATES) ??
+    extractEulerSeriesFromQuaternions(actualTopic, ACTUAL_QUATERNION_CANDIDATES)
   )
 }
 
@@ -211,8 +212,8 @@ function extractSetpointEulerSeries(
 ): EulerSeriesMap | null {
   const setpointTopic = findTopicChart(topicCharts, SETPOINT_TOPIC_FAMILY)
   return (
-    extractEulerSeriesFromQuaternions(setpointTopic, SETPOINT_QUATERNION_CANDIDATES) ??
-    extractEulerSeriesFromDerivedFields(setpointTopic, SETPOINT_EULER_CANDIDATES)
+    extractEulerSeriesFromDerivedFields(setpointTopic, SETPOINT_EULER_CANDIDATES) ??
+    extractEulerSeriesFromQuaternions(setpointTopic, SETPOINT_QUATERNION_CANDIDATES)
   )
 }
 
@@ -238,6 +239,55 @@ function buildAxisTrackingChart(
         points: setpointPoints,
       },
     ],
+  }
+}
+
+function pointsToSeriesSamples(points: Array<[number, number]>): TuningSeriesPoint[] {
+  return points
+    .filter(
+      (point): point is [number, number] =>
+        Array.isArray(point) &&
+        point.length >= 2 &&
+        isFiniteNumber(point[0]) &&
+        isFiniteNumber(point[1]),
+    )
+    .map(([timeS, value]) => ({ timeS, value }))
+}
+
+export function getPidAxisTrackingSeries(
+  pidTrackingCharts: TopicChart[] | null | undefined,
+  axis: TuningAxis,
+): {
+  actualSeries: TuningSeriesPoint[]
+  setpointSeries: TuningSeriesPoint[]
+} {
+  if (!Array.isArray(pidTrackingCharts)) {
+    return {
+      actualSeries: [],
+      setpointSeries: [],
+    }
+  }
+
+  const axisLabel = axis.charAt(0).toUpperCase() + axis.slice(1)
+  const chartTopic = `pid_${axis}_angle_tracking`
+  const chart =
+    pidTrackingCharts.find((item) => item?.topic === chartTopic) ?? null
+
+  if (!chart || !Array.isArray(chart.series)) {
+    return {
+      actualSeries: [],
+      setpointSeries: [],
+    }
+  }
+
+  const actual =
+    chart.series.find((item) => item?.name === `${axisLabel} Actual`) ?? null
+  const setpoint =
+    chart.series.find((item) => item?.name === `${axisLabel} Setpoint`) ?? null
+
+  return {
+    actualSeries: pointsToSeriesSamples(actual?.points ?? []),
+    setpointSeries: pointsToSeriesSamples(setpoint?.points ?? []),
   }
 }
 

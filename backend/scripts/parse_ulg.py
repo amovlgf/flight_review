@@ -41,6 +41,32 @@ NAV_STATE_COLOR_MAP = {
     "UNKNOWN": "#94a3b8",
 }
 
+ACTUAL_QUATERNION_FIELD_CANDIDATES = {
+    "q0": ["q[0]", "q.00", "q0"],
+    "q1": ["q[1]", "q.01", "q1"],
+    "q2": ["q[2]", "q.02", "q2"],
+    "q3": ["q[3]", "q.03", "q3"],
+}
+
+SETPOINT_QUATERNION_FIELD_CANDIDATES = {
+    "q0": ["q_d[0]", "q_d.00", "q_d0"],
+    "q1": ["q_d[1]", "q_d.01", "q_d1"],
+    "q2": ["q_d[2]", "q_d.02", "q_d2"],
+    "q3": ["q_d[3]", "q_d.03", "q_d3"],
+}
+
+ACTUAL_EULER_FIELD_CANDIDATES = {
+    "roll": ["roll"],
+    "pitch": ["pitch"],
+    "yaw": ["yaw"],
+}
+
+SETPOINT_EULER_FIELD_CANDIDATES = {
+    "roll": ["roll_body", "roll"],
+    "pitch": ["pitch_body", "pitch"],
+    "yaw": ["yaw_body", "yaw"],
+}
+
 
 def normalize_time_us(timestamp_array):
     if timestamp_array is None or len(timestamp_array) == 0:
@@ -79,6 +105,23 @@ def build_series(ds, time_field, value_field):
             continue
         points.append([xs[i], round(y, 3)])
     return points
+
+
+def find_first_existing_field(data, candidate_names):
+    for field_name in candidate_names:
+        if field_name in data:
+            return field_name
+    return None
+
+
+def resolve_quaternion_fields(data, field_candidates):
+    resolved = {}
+    for key, candidate_names in field_candidates.items():
+        field_name = find_first_existing_field(data, candidate_names)
+        if not field_name:
+            return None
+        resolved[key] = field_name
+    return resolved
 
 
 def derive_speed_from_local_position(ds):
@@ -124,6 +167,28 @@ def append_prefixed_fields(series_list, data, field_prefixes, unit):
     for field_name in data.keys():
         if any(field_name.startswith(prefix) for prefix in field_prefixes):
             append_if_exists(series_list, data, field_name, field_name, unit)
+
+
+def append_euler_triplet_if_exists(series_list, data, field_candidates, name_map):
+    if "timestamp" not in data:
+        return False
+
+    appended = False
+    for axis, candidate_names in field_candidates.items():
+        field_name = find_first_existing_field(data, candidate_names)
+        if not field_name:
+            continue
+        append_if_exists(
+            series_list,
+            data,
+            field_name,
+            name_map[axis],
+            "deg",
+            lambda y: math.degrees(y),
+        )
+        appended = appended or any(item["name"] == name_map[axis] for item in series_list)
+
+    return appended
 
 
 def is_numeric_series(values):
@@ -174,21 +239,33 @@ def append_vehicle_attitude(topic_charts, used_topics, attitude_ds):
 
     series = []
     data = attitude_ds.data
-    append_if_exists(series, data, "q[0]", "q[0]", "")
-    append_if_exists(series, data, "q[1]", "q[1]", "")
-    append_if_exists(series, data, "q[2]", "q[2]", "")
-    append_if_exists(series, data, "q[3]", "q[3]", "")
+    append_euler_triplet_if_exists(
+        series,
+        data,
+        ACTUAL_EULER_FIELD_CANDIDATES,
+        {"roll": "roll", "pitch": "pitch", "yaw": "yaw"},
+    )
+    quaternion_fields = resolve_quaternion_fields(data, ACTUAL_QUATERNION_FIELD_CANDIDATES)
+    if quaternion_fields and not any(
+        item["name"] in ("roll", "pitch", "yaw") for item in series
+    ):
+        append_if_exists(series, data, quaternion_fields["q0"], "q[0]", "")
+        append_if_exists(series, data, quaternion_fields["q1"], "q[1]", "")
+        append_if_exists(series, data, quaternion_fields["q2"], "q[2]", "")
+        append_if_exists(series, data, quaternion_fields["q3"], "q[3]", "")
 
-    if all(k in data for k in ("q[0]", "q[1]", "q[2]", "q[3]", "timestamp")):
+    if quaternion_fields and "timestamp" in data and not any(
+        item["name"] in ("roll", "pitch", "yaw") for item in series
+    ):
         xs = normalize_time_us(data["timestamp"])
         roll_points = []
         pitch_points = []
         yaw_points = []
         for i in range(len(xs)):
-            q0 = float(data["q[0]"][i])
-            q1 = float(data["q[1]"][i])
-            q2 = float(data["q[2]"][i])
-            q3 = float(data["q[3]"][i])
+            q0 = float(data[quaternion_fields["q0"]][i])
+            q1 = float(data[quaternion_fields["q1"]][i])
+            q2 = float(data[quaternion_fields["q2"]][i])
+            q3 = float(data[quaternion_fields["q3"]][i])
 
             roll = math.atan2(2.0 * (q0 * q1 + q2 * q3), 1.0 - 2.0 * (q1 * q1 + q2 * q2))
             pitch = math.asin(max(-1.0, min(1.0, 2.0 * (q0 * q2 - q3 * q1))))
@@ -326,14 +403,14 @@ def append_vehicle_attitude_setpoint(topic_charts, used_topics, ds):
         return
 
     series = []
-    append_if_exists(
-        series, data, "roll_body", "roll_sp", "deg", lambda y: math.degrees(y)
+    quaternion_fields = resolve_quaternion_fields(
+        data, SETPOINT_QUATERNION_FIELD_CANDIDATES
     )
-    append_if_exists(
-        series, data, "pitch_body", "pitch_sp", "deg", lambda y: math.degrees(y)
-    )
-    append_if_exists(
-        series, data, "yaw_body", "yaw_sp", "deg", lambda y: math.degrees(y)
+    append_euler_triplet_if_exists(
+        series,
+        data,
+        SETPOINT_EULER_FIELD_CANDIDATES,
+        {"roll": "roll_sp", "pitch": "pitch_sp", "yaw": "yaw_sp"},
     )
     append_if_exists(
         series,
@@ -347,17 +424,17 @@ def append_vehicle_attitude_setpoint(topic_charts, used_topics, ds):
     # If roll/pitch/yaw are unavailable, derive expected Euler angles from q_d.
     if (
         not any(item["name"] == "roll_sp" for item in series)
-        and all(k in data for k in ("q_d[0]", "q_d[1]", "q_d[2]", "q_d[3]"))
+        and quaternion_fields
     ):
         xs = normalize_time_us(data["timestamp"])
         roll_points = []
         pitch_points = []
         yaw_points = []
         for i in range(len(xs)):
-            q0 = float(data["q_d[0]"][i])
-            q1 = float(data["q_d[1]"][i])
-            q2 = float(data["q_d[2]"][i])
-            q3 = float(data["q_d[3]"][i])
+            q0 = float(data[quaternion_fields["q0"]][i])
+            q1 = float(data[quaternion_fields["q1"]][i])
+            q2 = float(data[quaternion_fields["q2"]][i])
+            q3 = float(data[quaternion_fields["q3"]][i])
 
             roll = math.atan2(
                 2.0 * (q0 * q1 + q2 * q3), 1.0 - 2.0 * (q1 * q1 + q2 * q2)

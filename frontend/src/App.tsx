@@ -3,6 +3,7 @@ import './App.css'
 import ChartPanel from './components/ChartPanel'
 import type {
   ActiveLogMeta,
+  ChartSelectionPreview,
   ChartSeries,
   ChartTimeRange,
   DiagnosticItem,
@@ -13,8 +14,20 @@ import LogSelector from './components/LogSelector'
 import TuningPanel from './components/TuningPanel'
 import UploadPanel from './components/UploadPanel'
 import { fetchChartData, fetchLogList, uploadLogFile } from './services/api'
-import type { TuningSegmentState } from './types/tuning'
-import { buildPidAttitudeTrackingCharts } from './utils/pidAttitudeTracking'
+import type {
+  TuningAxis,
+  TuningSegmentQualityResult,
+  TuningSegmentState,
+} from './types/tuning'
+import {
+  buildPidAttitudeTrackingCharts,
+  getPidAxisTrackingSeries,
+} from './utils/pidAttitudeTracking'
+import {
+  isValidSelectionBox,
+  normalizeSelectionBox,
+} from './utils/selectionBox'
+import { evaluatePidSegmentQuality } from './utils/segmentQuality'
 
 type ChartAction = {
   type: string
@@ -50,6 +63,22 @@ const DEFAULT_TUNING_SEGMENT: TuningSegmentState = {
   startS: null,
   endS: null,
   source: 'default',
+}
+
+const DEFAULT_SEGMENT_QUALITY: TuningSegmentQualityResult = {
+  status: 'unknown',
+  score: 0,
+  summary: '暂无片段质量评分。',
+  reasons: ['当前还没有可用于分析的片段。'],
+  recommendations: ['请先在图表中框选一个分析片段。'],
+  metrics: {
+    durationS: null,
+    setpointRangeDeg: null,
+    actualRangeDeg: null,
+    sampleCount: 0,
+    rmsErrorDeg: null,
+    peakErrorDeg: null,
+  },
 }
 
 function clampPercent(value: number) {
@@ -101,16 +130,23 @@ function App() {
   const [listTotal, setListTotal] = useState(0)
   const [viewMode, setViewMode] = useState<ViewMode>('upload')
   const [chartViewMode, setChartViewMode] = useState<ChartViewMode>('pid')
+  const [selectedTuningAxis, setSelectedTuningAxis] =
+    useState<TuningAxis>('roll')
   const [tuningSegment, setTuningSegment] = useState<TuningSegmentState>(
     DEFAULT_TUNING_SEGMENT,
   )
+  const [selectionBox, setSelectionBox] = useState<ChartSelectionPreview | null>(
+    null,
+  )
+
+  const pidTrackingCharts = useMemo(
+    () => buildPidAttitudeTrackingCharts(topicCharts),
+    [topicCharts],
+  )
 
   const visibleTopicCharts = useMemo(
-    () =>
-      chartViewMode === 'pid'
-        ? buildPidAttitudeTrackingCharts(topicCharts)
-        : topicCharts,
-    [chartViewMode, topicCharts],
+    () => (chartViewMode === 'pid' ? pidTrackingCharts : topicCharts),
+    [chartViewMode, pidTrackingCharts, topicCharts],
   )
 
   const visibleSeriesData = useMemo(
@@ -122,6 +158,39 @@ function App() {
     () => (chartViewMode === 'normal' ? diagnostics : []),
     [chartViewMode, diagnostics],
   )
+
+  const activePidChartTopic = useMemo(
+    () =>
+      chartViewMode === 'pid'
+        ? `pid_${selectedTuningAxis}_angle_tracking`
+        : undefined,
+    [chartViewMode, selectedTuningAxis],
+  )
+
+  const segmentQuality = useMemo(() => {
+    const { actualSeries, setpointSeries } = getPidAxisTrackingSeries(
+      pidTrackingCharts,
+      selectedTuningAxis,
+    )
+
+    if (actualSeries.length === 0 || setpointSeries.length === 0) {
+      return {
+        ...DEFAULT_SEGMENT_QUALITY,
+        reasons: ['当前日志缺少可用于片段质量评分的 PID 跟踪数据。'],
+        recommendations: ['请切换到包含姿态跟踪数据的日志，或改用常规视图检查原始数据。'],
+      }
+    }
+
+    const result = evaluatePidSegmentQuality({
+      axis: selectedTuningAxis,
+      startS: tuningSegment.startS,
+      endS: tuningSegment.endS,
+      actualSeries,
+      setpointSeries,
+    })
+
+    return result ?? DEFAULT_SEGMENT_QUALITY
+  }, [pidTrackingCharts, selectedTuningAxis, tuningSegment.endS, tuningSegment.startS])
 
   const chartViewDescription = useMemo(
     () =>
@@ -223,6 +292,7 @@ function App() {
       setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
       setActiveLogMeta(null)
       setTuningSegment(DEFAULT_TUNING_SEGMENT)
+      setSelectionBox(null)
       const uploadResult = await uploadLogFile(file)
       const logId =
         uploadResult && typeof uploadResult.logId === 'string'
@@ -245,6 +315,7 @@ function App() {
       setDiagnostics([])
       setActiveLogMeta(null)
       setTuningSegment(DEFAULT_TUNING_SEGMENT)
+      setSelectionBox(null)
       setStatusText('\u4e0a\u4f20\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u540e\u7aef\u662f\u5426\u542f\u52a8\u3002')
     } finally {
       setIsUploading(false)
@@ -255,6 +326,7 @@ function App() {
     chartCleanupRef.current.forEach((cleanup) => cleanup())
     chartCleanupRef.current.clear()
     chartRegistryRef.current.clear()
+    setSelectionBox(null)
   }, [])
 
   const handleBackToUpload = () => {
@@ -276,6 +348,7 @@ function App() {
           `\u5df2\u8c03\u7528\u56fe\u8868\u63a5\u53e3\uff08logId: ${selectedLogId}\uff09\uff1a\u5f53\u524d\u8fd4\u56de\u7a7a\u6570\u636e\uff08\u5360\u4f4d\uff09`,
         )
         setTuningSegment(DEFAULT_TUNING_SEGMENT)
+        setSelectionBox(null)
         return
       }
       const normalizedSeries = Array.isArray(data?.series) ? data.series : []
@@ -314,6 +387,7 @@ function App() {
       setModeSegments([])
       setActiveLogMeta(null)
       setTuningSegment(DEFAULT_TUNING_SEGMENT)
+      setSelectionBox(null)
       void loadLogList({ preferLogId: '' })
       setChartHint(
         '\u56fe\u8868\u6570\u636e\u8bf7\u6c42\u5931\u8d25\uff08\u53ef\u80fd\u662f\u65e5\u5fd7\u5df2\u5931\u6548\uff0c\u8bf7\u5237\u65b0\u5217\u8868\u6216\u91cd\u65b0\u4e0a\u4f20\uff09',
@@ -329,6 +403,7 @@ function App() {
     setDiagnostics([])
     setActiveLogMeta(null)
     setTuningSegment(DEFAULT_TUNING_SEGMENT)
+    setSelectionBox(null)
     if (logId) {
       setChartHint('\u5df2\u5207\u6362\u65e5\u5fd7\uff0c\u8bf7\u70b9\u51fb\u6253\u5f00\u56fe\u8868\u6a21\u5757\u3002')
     } else {
@@ -406,6 +481,20 @@ function App() {
     }, 0)
   }, [])
 
+  const clearSelectionPreview = useCallback((chartKey?: string) => {
+    setSelectionBox((current) => {
+      if (!current) {
+        return null
+      }
+
+      if (!chartKey || current.chartId === chartKey) {
+        return null
+      }
+
+      return current
+    })
+  }, [])
+
   const bindChartInteractions = useCallback((
     chartKey: string,
     chartInstance: unknown,
@@ -425,6 +514,7 @@ function App() {
     let lastClientX = 0
     let lastMiddleDownAt = 0
     let selectStartX = 0
+    let selectStartY = 0
 
     const applyDataZoom = (start: number, end: number) => {
       if (isChartDisposed(chart)) {
@@ -463,15 +553,44 @@ function App() {
       }
     }
 
+    const updateSelectionPreview = (clientX: number, clientY: number) => {
+      const rect = dom.getBoundingClientRect()
+      const currentX = Math.min(Math.max(clientX - rect.left, 0), rect.width)
+      const currentY = Math.min(Math.max(clientY - rect.top, 0), rect.height)
+      const normalizedBox = normalizeSelectionBox(
+        { x: selectStartX, y: selectStartY },
+        { x: currentX, y: currentY },
+      )
+
+      if (!normalizedBox) {
+        clearSelectionPreview(chartKey)
+        return
+      }
+
+      if (!isValidSelectionBox(normalizedBox, 5)) {
+        clearSelectionPreview(chartKey)
+        return
+      }
+
+      setSelectionBox({
+        chartId: chartKey,
+        left: normalizedBox.left,
+        top: normalizedBox.top,
+        width: normalizedBox.width,
+        height: normalizedBox.height,
+      })
+    }
+
     const finishLeftSelection = (clientX: number) => {
       if (!isLeftSelecting) return
       const rect = dom.getBoundingClientRect()
       const endX = Math.min(Math.max(clientX - rect.left, 0), rect.width)
       const delta = Math.abs(endX - selectStartX)
       isLeftSelecting = false
+      clearSelectionPreview(chartKey)
 
       // Left-drag box zoom on x-axis.
-      if (delta > 8 && rect.width > 0) {
+      if (delta >= 5 && rect.width > 0) {
         const minX = Math.min(selectStartX, endX)
         const maxX = Math.max(selectStartX, endX)
         const start = (minX / rect.width) * 100
@@ -498,7 +617,12 @@ function App() {
       if (event.button === 0) {
         const rect = dom.getBoundingClientRect()
         selectStartX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width)
+        selectStartY = Math.min(
+          Math.max(event.clientY - rect.top, 0),
+          rect.height,
+        )
         isLeftSelecting = true
+        clearSelectionPreview(chartKey)
         return
       }
 
@@ -518,6 +642,7 @@ function App() {
     const onMouseMove = (event: MouseEvent) => {
       if (isLeftSelecting) {
         event.preventDefault()
+        updateSelectionPreview(event.clientX, event.clientY)
       }
       if (!isMiddleDragging) return
       const rect = dom.getBoundingClientRect()
@@ -563,6 +688,9 @@ function App() {
     }
 
     const onMouseLeave = () => {
+      if (isLeftSelecting) {
+        clearSelectionPreview(chartKey)
+      }
       isMiddleDragging = false
     }
 
@@ -611,10 +739,11 @@ function App() {
         }
       }
       chartRegistryRef.current.delete(chartKey)
+      clearSelectionPreview(chartKey)
     }
 
     chartCleanupRef.current.set(chartKey, cleanup)
-  }, [syncChartZoom])
+  }, [clearSelectionPreview, syncChartZoom])
 
   const handleChartDispose = useCallback((chartKey: string) => {
     const cleanup = chartCleanupRef.current.get(chartKey)
@@ -679,7 +808,10 @@ function App() {
             />
             <TuningPanel
               selectedLogId={selectedLogId || undefined}
+              axis={selectedTuningAxis}
+              onAxisChange={setSelectedTuningAxis}
               tuningSegment={tuningSegment}
+              segmentQuality={segmentQuality}
               onTuningSegmentChange={setTuningSegment}
             />
             <div className="chart-view-toolbar">
@@ -711,6 +843,13 @@ function App() {
               seriesData={visibleSeriesData}
               modeSegments={modeSegments}
               diagnostics={visibleDiagnostics}
+              selectionBox={selectionBox}
+              activeChartTopic={activePidChartTopic}
+              activeChartBadgeLabel={
+                chartViewMode === 'pid'
+                  ? '\u5f53\u524d\u8c03\u53c2\u8f74'
+                  : undefined
+              }
               chartHint={chartHint}
               emptyStateMessage={chartEmptyStateMessage}
               showDefaultSeriesFallback={chartViewMode === 'normal'}
