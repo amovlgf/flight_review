@@ -2,10 +2,13 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const {
+  buildLogUnlockAnalysis,
   buildParsedLog,
   ensureStoredLogParsed,
 } = require('./services/logParserService');
+const { hasUnlockedFlight } = require('./services/unlockFlightService');
 const {
   VALID_TUNING_AXES,
   VALID_TUNING_LOOPS,
@@ -25,6 +28,30 @@ const parsedLogStore = new Map();
 
 function decodeUploadedFileName(fileName) {
   return Buffer.from(fileName, 'latin1').toString('utf8');
+}
+
+function removeUploadedTempFile(filePath) {
+  if (!filePath) return;
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch {
+    // Best-effort cleanup for batch uploads.
+  }
+}
+
+function resolveBatchFailureReason(error) {
+  if (!error) return 'ULG parsing failed.';
+  if (error.message === 'ULG_FILE_TOO_SMALL') {
+    return 'ULG file is too small.';
+  }
+  if (error.message === 'INVALID_ULG_MAGIC') {
+    return 'Invalid ULG file header.';
+  }
+  if (typeof error.stderr === 'string' && error.stderr.trim()) {
+    const stderrLines = error.stderr.trim().split(/\r?\n/);
+    return stderrLines[stderrLines.length - 1] || 'ULG parsing failed.';
+  }
+  return error.message || 'ULG parsing failed.';
 }
 
 app.use(cors());
@@ -108,6 +135,66 @@ app.post('/api/logs/upload', upload.single('logFile'), (req, res) => {
       reason: error.message,
     });
   }
+});
+
+app.post('/api/logs/batch-analyze', upload.array('logFiles'), (req, res) => {
+  const files = Array.isArray(req.files) ? req.files : [];
+
+  if (files.length === 0) {
+    return res.status(400).json({
+      message: 'No files uploaded.',
+      unlockedLogs: [],
+      failedLogs: [],
+      total: 0,
+      unlockedCount: 0,
+      failedCount: 0,
+    });
+  }
+
+  const unlockedLogs = [];
+  const unlockedLogDetails = [];
+  const failedLogs = [];
+
+  for (const file of files) {
+    const safeOriginalName = decodeUploadedFileName(file.originalname);
+    const extension = path.extname(safeOriginalName).toLowerCase();
+
+    try {
+      if (extension !== '.ulg') {
+        failedLogs.push({
+          fileName: safeOriginalName,
+          reason: 'Only .ulg files are supported now.',
+        });
+        continue;
+      }
+
+      const parsedLog = buildLogUnlockAnalysis(file.path, safeOriginalName);
+
+      if (hasUnlockedFlight(parsedLog)) {
+        unlockedLogs.push(safeOriginalName);
+        unlockedLogDetails.push({
+          fileName: safeOriginalName,
+          flightTimeS: parsedLog.unlockSummary?.flightTimeS ?? null,
+        });
+      }
+    } catch (error) {
+      failedLogs.push({
+        fileName: safeOriginalName,
+        reason: resolveBatchFailureReason(error),
+      });
+    } finally {
+      removeUploadedTempFile(file.path);
+    }
+  }
+
+  return res.json({
+    unlockedLogs,
+    unlockedLogDetails,
+    failedLogs,
+    total: files.length,
+    unlockedCount: unlockedLogs.length,
+    failedCount: failedLogs.length,
+  });
 });
 
 app.get('/api/logs/chart-data', (req, res) => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import BatchLogUpload from './components/BatchLogUpload'
 import ChartPanel from './components/ChartPanel'
 import type {
   ActiveLogMeta,
@@ -767,13 +768,16 @@ function App() {
 
       <main className="page">
         {viewMode === 'upload' ? (
-          <UploadPanel
-            selectedFileName={selectedFileName}
-            isUploading={isUploading}
-            statusText={statusText}
-            onFileSelected={handleFileSelected}
-            onUpload={handleUpload}
-          />
+          <>
+            <UploadPanel
+              selectedFileName={selectedFileName}
+              isUploading={isUploading}
+              statusText={statusText}
+              onFileSelected={handleFileSelected}
+              onUpload={handleUpload}
+            />
+            <BatchLogUpload />
+          </>
         ) : (
           <section className={`card ${selectedLogId ? '' : 'card-disabled'}`}>
             <div className="page-title-row">

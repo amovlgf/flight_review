@@ -34,7 +34,7 @@ class ULog:
   fs.writeFileSync(path.join(tempDir, 'pyulog.py'), moduleSource, 'utf8');
 }
 
-function runParserWithDatasets(datasets) {
+function runParserWithDatasets(datasets, parserArgs = []) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'log-dev-pyulog-'));
   try {
     writeFakePyulogModule(tempDir, datasets);
@@ -49,7 +49,7 @@ function runParserWithDatasets(datasets) {
 
     const rawOutput = execFileSync(
       'python',
-      ['-X', 'utf8', PARSER_SCRIPT, dummyLogPath],
+      ['-X', 'utf8', PARSER_SCRIPT, ...parserArgs, dummyLogPath],
       {
         cwd: path.join(__dirname, '..'),
         encoding: 'utf8',
@@ -189,4 +189,62 @@ test('parse_ulg.py prefers direct Euler fields for attitude and setpoint when av
       [1, 36],
     ],
   );
+});
+
+test('parse_ulg.py reports unlock summary from actuator_armed.armed', () => {
+  const payload = runParserWithDatasets([
+    {
+      name: 'actuator_armed',
+      data: {
+        timestamp: [0, 1_000_000, 2_000_000],
+        armed: [0, 1, 0],
+      },
+    },
+  ]);
+
+  assert.equal(payload.unlockSummary.hasUnlockedFlight, true);
+  assert.deepEqual(payload.unlockSummary.sources, [
+    { topic: 'actuator_armed', field: 'armed', flightTimeS: 1 },
+  ]);
+  assert.equal(payload.unlockSummary.flightTimeS, 1);
+});
+
+test('parse_ulg.py reports unlock summary from vehicle_status.arming_state', () => {
+  const payload = runParserWithDatasets([
+    {
+      name: 'vehicle_status',
+      data: {
+        timestamp: [0, 1_000_000, 2_000_000],
+        nav_state: [0, 0, 0],
+        arming_state: [1, 2, 1],
+      },
+    },
+  ]);
+
+  assert.equal(payload.unlockSummary.hasUnlockedFlight, true);
+  assert.equal(payload.unlockSummary.flightTimeS, 1);
+  assert.ok(
+    payload.unlockSummary.sources.some(
+      (item) => item.topic === 'vehicle_status' && item.field === 'arming_state',
+    ),
+  );
+});
+
+test('parse_ulg.py can return lightweight unlock summary only', () => {
+  const payload = runParserWithDatasets(
+    [
+      {
+        name: 'actuator_armed',
+        data: {
+          timestamp: [0, 1_000_000, 2_000_000],
+          armed: [0, 1, 0],
+        },
+      },
+    ],
+    ['--unlock-summary'],
+  );
+
+  assert.deepEqual(Object.keys(payload), ['unlockSummary']);
+  assert.equal(payload.unlockSummary.hasUnlockedFlight, true);
+  assert.equal(payload.unlockSummary.flightTimeS, 1);
 });

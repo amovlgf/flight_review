@@ -76,6 +76,25 @@ export type UploadLogResponse = {
   modeSegments: ModeSegment[]
 }
 
+export type BatchAnalyzeFailedLog = {
+  fileName: string
+  reason: string
+}
+
+export type BatchAnalyzeUnlockedLog = {
+  fileName: string
+  flightTimeS: number | null
+}
+
+export type BatchAnalyzeLogsResponse = {
+  unlockedLogs: string[]
+  unlockedLogDetails?: BatchAnalyzeUnlockedLog[]
+  failedLogs: BatchAnalyzeFailedLog[]
+  total: number
+  unlockedCount: number
+  failedCount: number
+}
+
 export type LogListResponse = {
   total: number
   page: number

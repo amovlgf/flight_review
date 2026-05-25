@@ -1,4 +1,5 @@
 import type {
+  BatchAnalyzeLogsResponse,
   ChartDataResponse,
   FetchLogListParams,
   LogListResponse,
@@ -26,6 +27,35 @@ export async function uploadLogFile(file: File): Promise<UploadLogResponse> {
 
   if (!response.ok) {
     throw new Error('UPLOAD_FAILED')
+  }
+
+  return response.json()
+}
+
+export async function batchAnalyzeLogFiles(
+  files: File[],
+): Promise<BatchAnalyzeLogsResponse> {
+  const formData = new FormData()
+  files.forEach((file) => {
+    formData.append('logFiles', file)
+  })
+
+  const response = await fetch(`${API_BASE_URL}/logs/batch-analyze`, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    let errorMessage = 'BATCH_ANALYZE_FAILED'
+    try {
+      const payload = await response.json()
+      if (payload && typeof payload.message === 'string') {
+        errorMessage = payload.message
+      }
+    } catch {
+      // ignore JSON parse error and keep default message
+    }
+    throw new Error(errorMessage)
   }
 
   return response.json()

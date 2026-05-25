@@ -112,14 +112,59 @@ function parsePx4Series(filePath) {
   return JSON.parse(output);
 }
 
-function parseOrFallbackSeries(filePath, fallbackSeriesMap) {
+function parsePx4UnlockSummary(filePath) {
+  const parserScriptPath = path.join(__dirname, '..', 'scripts', 'parse_ulg.py');
+  const output = execFileSync(
+    'python',
+    ['-X', 'utf8', parserScriptPath, '--unlock-summary', filePath],
+    {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  return JSON.parse(output);
+}
+
+function buildDefaultUnlockSummary() {
+  return {
+    hasUnlockedFlight: false,
+    sources: [],
+    flightTimeS: null,
+  };
+}
+
+function normalizeUnlockSummary(parsed) {
+  if (!parsed || typeof parsed !== 'object') {
+    return buildDefaultUnlockSummary();
+  }
+
+  const unlockSummary = parsed.unlockSummary;
+  if (!unlockSummary || typeof unlockSummary !== 'object') {
+    return buildDefaultUnlockSummary();
+  }
+
+  return {
+    hasUnlockedFlight: unlockSummary.hasUnlockedFlight === true,
+    sources: Array.isArray(unlockSummary.sources) ? unlockSummary.sources : [],
+    flightTimeS:
+      typeof unlockSummary.flightTimeS === 'number' &&
+      Number.isFinite(unlockSummary.flightTimeS)
+        ? unlockSummary.flightTimeS
+        : null,
+  };
+}
+
+function parseOrFallbackSeries(filePath, fallbackSeriesMap, options = {}) {
   let topicCharts = buildFallbackTopicCharts(fallbackSeriesMap);
   let dataSource = 'header-derived-simulated-series';
   let usedTopics = [];
   let modeSegments = [];
+  let unlockSummary = buildDefaultUnlockSummary();
 
   try {
     const parsed = parsePx4Series(filePath);
+    unlockSummary = normalizeUnlockSummary(parsed);
     if (parsed && Array.isArray(parsed.topicCharts) && parsed.topicCharts.length > 0) {
       topicCharts = parsed.topicCharts.map((topic) => ({
         topic: typeof topic.topic === 'string' ? topic.topic : 'unknown_topic',
@@ -140,6 +185,9 @@ function parseOrFallbackSeries(filePath, fallbackSeriesMap) {
       modeSegments = Array.isArray(parsed.modeSegments) ? parsed.modeSegments : [];
     }
   } catch (parseError) {
+    if (options.allowFallback === false) {
+      throw parseError;
+    }
     usedTopics = [];
   }
 
@@ -148,6 +196,7 @@ function parseOrFallbackSeries(filePath, fallbackSeriesMap) {
     dataSource,
     usedTopics,
     modeSegments,
+    unlockSummary,
     series: topicCharts.flatMap((item) => item.series),
   };
 }
@@ -195,17 +244,18 @@ function seriesArrayToMap(seriesArray) {
   return map;
 }
 
-function buildParsedLog(filePath, fileName) {
+function buildParsedLog(filePath, fileName, options = {}) {
   const metadata = parseUlogHeader(filePath);
   const logId = randomUUID();
   const seed = buildFallbackSeed(`${fileName}-${logId}`);
   const fallbackSeriesMap = generateFallbackTimeSeries(metadata, seed);
-  const parsedResult = parseOrFallbackSeries(filePath, fallbackSeriesMap);
+  const parsedResult = parseOrFallbackSeries(filePath, fallbackSeriesMap, options);
   const topicCharts = parsedResult.topicCharts;
   const series = parsedResult.series;
   const dataSource = parsedResult.dataSource;
   const usedTopics = parsedResult.usedTopics;
   const modeSegments = parsedResult.modeSegments;
+  const unlockSummary = parsedResult.unlockSummary;
 
   const diagnostics = buildDiagnostics(
     dataSource === 'px4-topics-derived'
@@ -224,7 +274,19 @@ function buildParsedLog(filePath, fileName) {
     dataSource,
     usedTopics,
     modeSegments,
+    unlockSummary,
     storedPath: filePath,
+  };
+}
+
+function buildLogUnlockAnalysis(filePath, fileName) {
+  const metadata = parseUlogHeader(filePath);
+  const parsed = parsePx4UnlockSummary(filePath);
+
+  return {
+    fileName,
+    metadata,
+    unlockSummary: normalizeUnlockSummary(parsed),
   };
 }
 
@@ -252,6 +314,7 @@ function ensureStoredLogParsed(stored) {
     stored.dataSource = reparsed.dataSource;
     stored.usedTopics = reparsed.usedTopics;
     stored.modeSegments = reparsed.modeSegments;
+    stored.unlockSummary = reparsed.unlockSummary;
     stored.diagnostics = diagnostics;
   }
 
@@ -260,5 +323,6 @@ function ensureStoredLogParsed(stored) {
 
 module.exports = {
   buildParsedLog,
+  buildLogUnlockAnalysis,
   ensureStoredLogParsed,
 };

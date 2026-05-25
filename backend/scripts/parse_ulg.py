@@ -41,6 +41,8 @@ NAV_STATE_COLOR_MAP = {
     "UNKNOWN": "#94a3b8",
 }
 
+PX4_ARMED_STATE_VALUES = {2, 5}
+
 ACTUAL_QUATERNION_FIELD_CANDIDATES = {
     "q0": ["q[0]", "q.00", "q0"],
     "q1": ["q[1]", "q.01", "q1"],
@@ -199,6 +201,115 @@ def is_numeric_series(values):
     except Exception:
         return False
     return not (math.isnan(sample) or math.isinf(sample))
+
+
+def has_truthy_sample(values):
+    if values is None or len(values) == 0:
+        return False
+    for value in values:
+        try:
+            numeric_value = float(value)
+        except Exception:
+            continue
+        if math.isnan(numeric_value) or math.isinf(numeric_value):
+            continue
+        if numeric_value > 0.5:
+            return True
+    return False
+
+
+def has_armed_state_sample(values):
+    if values is None or len(values) == 0:
+        return False
+    for value in values:
+        try:
+            numeric_value = int(round(float(value)))
+        except Exception:
+            continue
+        if numeric_value in PX4_ARMED_STATE_VALUES:
+            return True
+    return False
+
+
+def get_state_duration_s(data, state_field, is_unlocked_state):
+    if "timestamp" not in data or state_field not in data:
+        return None
+
+    timestamps = data["timestamp"]
+    states = data[state_field]
+    sample_count = min(len(timestamps), len(states))
+    if sample_count < 2:
+        try:
+            return 0.0 if sample_count == 1 and is_unlocked_state(states[0]) else None
+        except Exception:
+            return None
+
+    duration_us = 0.0
+    for i in range(sample_count - 1):
+        try:
+            is_unlocked = is_unlocked_state(states[i])
+        except Exception:
+            is_unlocked = False
+        if not is_unlocked:
+            continue
+        try:
+            start_us = float(timestamps[i])
+            end_us = float(timestamps[i + 1])
+        except Exception:
+            continue
+        if math.isnan(start_us) or math.isnan(end_us):
+            continue
+        if end_us > start_us:
+            duration_us += end_us - start_us
+
+    return round(duration_us / 1_000_000.0, 3)
+
+
+def build_unlock_summary(vehicle_status_ds, actuator_armed_ds):
+    sources = []
+    flight_time_candidates = []
+
+    if actuator_armed_ds:
+        data = actuator_armed_ds.data
+        # PX4 actuator_armed.armed is the direct motor unlock/armed flag.
+        if "armed" in data and has_truthy_sample(data["armed"]):
+            duration_s = get_state_duration_s(data, "armed", lambda value: float(value) > 0.5)
+            source = {"topic": "actuator_armed", "field": "armed"}
+            if duration_s is not None:
+                source["flightTimeS"] = duration_s
+                flight_time_candidates.append(duration_s)
+            sources.append(source)
+
+    if vehicle_status_ds:
+        data = vehicle_status_ds.data
+        # PX4 vehicle_status.arming_state uses 2 for ARMED and 5 for in-air restore.
+        if "arming_state" in data and has_armed_state_sample(data["arming_state"]):
+            duration_s = get_state_duration_s(
+                data,
+                "arming_state",
+                lambda value: int(round(float(value))) in PX4_ARMED_STATE_VALUES,
+            )
+            source = {"topic": "vehicle_status", "field": "arming_state"}
+            if duration_s is not None:
+                source["flightTimeS"] = duration_s
+                flight_time_candidates.append(duration_s)
+            sources.append(source)
+
+    return {
+        "hasUnlockedFlight": len(sources) > 0,
+        "sources": sources,
+        "flightTimeS": max(flight_time_candidates) if flight_time_candidates else None,
+    }
+
+
+def parse_unlock_summary(file_path):
+    ulog = ULog(
+        file_path,
+        message_name_filter_list=["actuator_armed", "vehicle_status"],
+    )
+    vehicle_status = find_dataset(ulog, ["vehicle_status"])
+    actuator_armed = find_dataset(ulog, ["actuator_armed"])
+    print(json.dumps({"unlockSummary": build_unlock_summary(vehicle_status, actuator_armed)}))
 
 
 def append_generic_topic(topic_charts, used_topics, ds, max_fields=24):
@@ -467,6 +578,12 @@ def main():
     if len(sys.argv) < 2:
         raise RuntimeError("FILE_PATH_REQUIRED")
 
+    if sys.argv[1] == "--unlock-summary":
+        if len(sys.argv) < 3:
+            raise RuntimeError("FILE_PATH_REQUIRED")
+        parse_unlock_summary(sys.argv[2])
+        return
+
     file_path = sys.argv[1]
     ulog = ULog(file_path, message_name_filter_list=None)
 
@@ -476,6 +593,7 @@ def main():
     vehicle_attitude_setpoint = find_dataset(ulog, ["vehicle_attitude_setpoint"])
     vehicle_gps = find_dataset(ulog, ["vehicle_gps_position"])
     vehicle_status = find_dataset(ulog, ["vehicle_status"])
+    actuator_armed = find_dataset(ulog, ["actuator_armed"])
     actuator_outputs_list = find_datasets(ulog, ["actuator_outputs"])
     generic_topic_names = [
         "vehicle_angular_velocity",
@@ -555,6 +673,7 @@ def main():
         append_generic_topic(topic_charts, used_topics, ds)
 
     mode_segments = build_mode_segments(vehicle_status)
+    unlock_summary = build_unlock_summary(vehicle_status, actuator_armed)
 
     if not topic_charts:
         payload = {
@@ -562,6 +681,7 @@ def main():
             "topicCharts": [],
             "usedTopics": [],
             "modeSegments": mode_segments,
+            "unlockSummary": unlock_summary,
         }
         print(json.dumps(payload))
         return
@@ -571,6 +691,7 @@ def main():
         "usedTopics": used_topics,
         "topicCharts": topic_charts,
         "modeSegments": mode_segments,
+        "unlockSummary": unlock_summary,
     }
     print(json.dumps(payload))
 
