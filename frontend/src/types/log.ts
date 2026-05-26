@@ -68,7 +68,7 @@ export type UploadLogResponse = {
     originalName: string
     size: number
   }
-  metadata: LogMetada
+  metadata: LogMetadata
   diagnostics: Diagnostic[]
   topicCharts: TopicChart[]
   dataSource: ChartDataSource
