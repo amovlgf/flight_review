@@ -144,6 +144,7 @@ app.post('/api/logs/batch-analyze', upload.array('logFiles'), (req, res) => {
     return res.status(400).json({
       message: 'No files uploaded.',
       unlockedLogs: [],
+      unlockedLogDetails: [],
       failedLogs: [],
       total: 0,
       unlockedCount: 0,
@@ -175,6 +176,7 @@ app.post('/api/logs/batch-analyze', upload.array('logFiles'), (req, res) => {
         unlockedLogDetails.push({
           fileName: safeOriginalName,
           flightTimeS: parsedLog.unlockSummary?.flightTimeS ?? null,
+          logStartTimestampUs: parsedLog.metadata?.logStartTimestampUs ?? null,
         });
       }
     } catch (error) {

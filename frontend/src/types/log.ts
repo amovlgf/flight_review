@@ -68,7 +68,7 @@ export type UploadLogResponse = {
     originalName: string
     size: number
   }
-  metadata: LogMetadata
+  metadata: LogMetada
   diagnostics: Diagnostic[]
   topicCharts: TopicChart[]
   dataSource: ChartDataSource
@@ -84,6 +84,7 @@ export type BatchAnalyzeFailedLog = {
 export type BatchAnalyzeUnlockedLog = {
   fileName: string
   flightTimeS: number | null
+  logStartTimestampUs?: number | null
 }
 
 export type BatchAnalyzeLogsResponse = {
