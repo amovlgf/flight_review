@@ -1,7 +1,9 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { batchAnalyzeLogFiles } from '../services/api'
 import type { BatchAnalyzeLogsResponse } from '../types/log'
+
+type BatchSortMode = 'logTime' | 'flightTime'
 
 function BatchLogUpload() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -9,15 +11,62 @@ function BatchLogUpload() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [result, setResult] = useState<BatchAnalyzeLogsResponse | null>(null)
   const [errorText, setErrorText] = useState('')
+  const [sortMode, setSortMode] = useState<BatchSortMode>('logTime')
 
   const selectedFileNames = selectedFiles.map((file) => file.name)
-  const unlockedLogDetails =
-    result?.unlockedLogDetails && result.unlockedLogDetails.length > 0
-      ? result.unlockedLogDetails
-      : result?.unlockedLogs.map((fileName) => ({
-          fileName,
-          flightTimeS: null,
-        })) ?? []
+  const unlockedLogDetails = useMemo(
+    () =>
+      result?.unlockedLogDetails && result.unlockedLogDetails.length > 0
+        ? result.unlockedLogDetails
+        : result?.unlockedLogs.map((fileName) => ({
+            fileName,
+            flightTimeS: null,
+            logStartTimestampUs: null,
+          })) ?? [],
+    [result],
+  )
+
+  const sortedUnlockedLogDetails = useMemo(() => {
+    return unlockedLogDetails
+      .map((item, uploadIndex) => ({ ...item, uploadIndex }))
+      .sort((a, b) => {
+        if (sortMode === 'flightTime') {
+          const aFlightTime =
+            typeof a.flightTimeS === 'number' && Number.isFinite(a.flightTimeS)
+              ? a.flightTimeS
+              : -1
+          const bFlightTime =
+            typeof b.flightTimeS === 'number' && Number.isFinite(b.flightTimeS)
+              ? b.flightTimeS
+              : -1
+
+          if (bFlightTime !== aFlightTime) {
+            return bFlightTime - aFlightTime
+          }
+
+          return a.uploadIndex - b.uploadIndex
+        }
+
+        const aLogTime =
+          typeof a.logStartTimestampUs === 'number' &&
+          Number.isFinite(a.logStartTimestampUs) &&
+          a.logStartTimestampUs > 0
+            ? a.logStartTimestampUs
+            : null
+        const bLogTime =
+          typeof b.logStartTimestampUs === 'number' &&
+          Number.isFinite(b.logStartTimestampUs) &&
+          b.logStartTimestampUs > 0
+            ? b.logStartTimestampUs
+            : null
+
+        if (aLogTime !== null && bLogTime !== null && aLogTime !== bLogTime) {
+          return aLogTime - bLogTime
+        }
+
+        return a.uploadIndex - b.uploadIndex
+      })
+  }, [sortMode, unlockedLogDetails])
 
   const formatFlightTime = (flightTimeS: number | null) => {
     if (typeof flightTimeS !== 'number' || !Number.isFinite(flightTimeS)) {
@@ -50,6 +99,7 @@ function BatchLogUpload() {
       setResult(null)
       setErrorText('')
       const batchResult = await batchAnalyzeLogFiles(selectedFiles)
+      setSortMode('logTime')
       setResult(batchResult)
     } catch (error) {
       setErrorText(
@@ -109,7 +159,36 @@ function BatchLogUpload() {
           </p>
 
           <div className="batch-result-block">
-            <h3>{'\u89e3\u9501\u98de\u884c\u65e5\u5fd7'}</h3>
+            <div className="batch-result-title-row">
+              <h3>{'\u89e3\u9501\u98de\u884c\u65e5\u5fd7'}</h3>
+              {unlockedLogDetails.length > 0 && (
+                <div
+                  className="batch-sort-actions"
+                  aria-label="\u89e3\u9501\u65e5\u5fd7\u6392\u5e8f"
+                >
+                  <button
+                    type="button"
+                    className={`batch-sort-button ${
+                      sortMode === 'logTime' ? 'batch-sort-button-active' : ''
+                    }`}
+                    onClick={() => setSortMode('logTime')}
+                  >
+                    {'\u65e5\u5fd7\u65f6\u95f4'}
+                  </button>
+                  <button
+                    type="button"
+                    className={`batch-sort-button ${
+                      sortMode === 'flightTime'
+                        ? 'batch-sort-button-active'
+                        : ''
+                    }`}
+                    onClick={() => setSortMode('flightTime')}
+                  >
+                    {'\u98de\u884c\u65f6\u95f4'}
+                  </button>
+                </div>
+              )}
+            </div>
             {unlockedLogDetails.length > 0 ? (
               <table className="batch-table">
                 <thead>
@@ -119,7 +198,7 @@ function BatchLogUpload() {
                   </tr>
                 </thead>
                 <tbody>
-                  {unlockedLogDetails.map((item, index) => (
+                  {sortedUnlockedLogDetails.map((item, index) => (
                     <tr key={`${item.fileName}-${index}`}>
                       <td>{item.fileName}</td>
                       <td>{formatFlightTime(item.flightTimeS)}</td>

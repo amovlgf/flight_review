@@ -84,6 +84,7 @@ export type BatchAnalyzeFailedLog = {
 export type BatchAnalyzeUnlockedLog = {
   fileName: string
   flightTimeS: number | null
+  logStartTimestampUs?: number | null
 }
 
 export type BatchAnalyzeLogsResponse = {

@@ -27,6 +27,7 @@ type BatchAnalyzeLogsResponse = {
   unlockedLogDetails: Array<{
     fileName: string;
     flightTimeS: number | null;
+    logStartTimestampUs: number | null;
   }>;
   failedLogs: Array<{
     fileName: string;
@@ -45,3 +46,7 @@ name.
 `flightTimeS` is the estimated total time in seconds while the log reported an
 armed/unlocked state. It is `null` when the log confirms unlock but does not
 include enough timestamp data to estimate a duration.
+
+`logStartTimestampUs` comes from the ULog header and is used by the frontend to
+sort unlocked logs chronologically. When it is missing or zero, the frontend
+keeps those logs in upload order.

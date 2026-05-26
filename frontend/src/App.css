@@ -148,6 +148,44 @@
   color: #334155;
 }
 
+.batch-result-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.batch-sort-actions {
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  padding: 3px;
+  background: #f8fafc;
+}
+
+.batch-sort-button {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  color: #475569;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.batch-sort-button:hover {
+  color: #1f2937;
+  background: #eef2f7;
+}
+
+.batch-sort-button-active {
+  background: #ffffff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
 .batch-list {
   margin: 0;
   padding-left: 20px;
