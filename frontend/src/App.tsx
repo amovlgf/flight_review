@@ -60,6 +60,7 @@ type ViewMode = 'upload' | 'chart'
 type ChartViewMode = 'pid' | 'normal'
 
 const PAGE_SIZE = 8
+const SHOW_SINGLE_LOG_UPLOAD = false
 const DEFAULT_TUNING_SEGMENT: TuningSegmentState = {
   startS: null,
   endS: null,
@@ -769,13 +770,15 @@ function App() {
       <main className="page">
         {viewMode === 'upload' ? (
           <>
-            <UploadPanel
-              selectedFileName={selectedFileName}
-              isUploading={isUploading}
-              statusText={statusText}
-              onFileSelected={handleFileSelected}
-              onUpload={handleUpload}
-            />
+            {SHOW_SINGLE_LOG_UPLOAD && (
+              <UploadPanel
+                selectedFileName={selectedFileName}
+                isUploading={isUploading}
+                statusText={statusText}
+                onFileSelected={handleFileSelected}
+                onUpload={handleUpload}
+              />
+            )}
             <BatchLogUpload />
           </>
         ) : (
