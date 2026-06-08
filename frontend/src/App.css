@@ -71,6 +71,137 @@
   margin: 18px 0 12px;
 }
 
+.control-quality-panel {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0;
+  border: 1px solid #d8dee9;
+  border-radius: 10px;
+  padding: 14px;
+  background: #fbfdff;
+}
+
+.control-quality-panel h3,
+.control-quality-panel h4 {
+  margin: 0;
+}
+
+.control-quality-actions {
+  margin-bottom: 0;
+}
+
+.control-quality-range {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 180px)) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.control-quality-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.control-quality-summary > div {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #ffffff;
+}
+
+.control-quality-summary p {
+  margin: 6px 0 0;
+  color: #475569;
+}
+
+.control-quality-hints {
+  margin: 0;
+  padding-left: 20px;
+  color: #334155;
+}
+
+.control-quality-loop-list {
+  display: grid;
+  gap: 12px;
+}
+
+.control-quality-loop {
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.control-quality-loop-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.control-quality-axis {
+  max-width: 220px;
+  margin-bottom: 10px;
+}
+
+.control-status {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 4px 9px;
+  color: #475569;
+  font-size: 12px;
+  background: #f8fafc;
+}
+
+.control-status-available {
+  border-color: #10b981;
+  color: #166534;
+  background: #edfdf5;
+}
+
+.control-status-unavailable,
+.control-status-topic_missing,
+.control-status-field_missing,
+.control-status-not_enough_data {
+  border-color: #f59e0b;
+  color: #7c2d12;
+  background: #fff8eb;
+}
+
+.control-quality-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+}
+
+.control-quality-table th,
+.control-quality-table td {
+  border: 1px solid #e2e8f0;
+  padding: 7px 9px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.control-quality-table th {
+  width: 180px;
+  color: #475569;
+  background: #f8fafc;
+  font-weight: 600;
+}
+
+.control-quality-charts {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.control-quality-error {
+  color: #991b1b;
+}
+
 .chart-view-row {
   display: flex;
   flex-wrap: wrap;
@@ -565,7 +696,9 @@
   .tuning-grid,
   .tuning-grid-compact,
   .tuning-bounds-row,
-  .tuning-metrics-row {
+  .tuning-metrics-row,
+  .control-quality-range,
+  .control-quality-summary {
     grid-template-columns: 1fr;
   }
 

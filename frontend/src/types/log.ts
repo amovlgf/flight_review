@@ -110,3 +110,72 @@ export type FetchLogListParams = {
   page?: number
   pageSize?: number
 }
+
+export type ControlQualityStatus =
+  | 'available'
+  | 'unavailable'
+  | 'topic_missing'
+  | 'field_missing'
+  | 'not_enough_data'
+
+export type ControlQualityMetrics = Record<string, number | string | null>
+
+export type ControlQualityAxis = {
+  status: ControlQualityStatus | string
+  unit: string
+  metrics: ControlQualityMetrics
+}
+
+export type ControlQualityLoop = {
+  status: ControlQualityStatus | string
+  axis?: Record<string, ControlQualityAxis>
+  metrics?: ControlQualityMetrics
+  channels?: Array<Record<string, number | string | null>>
+  charts?: Array<{
+    axis: string
+    unit: string
+    setpointFeedback: Array<[number, number, number]>
+    error: ChartPoint[]
+  }>
+  notes?: string[]
+}
+
+export type ControlQualityReport = {
+  log_file: string
+  analysis_time_range: {
+    start_s: number | null
+    end_s: number | null
+    source: string
+  }
+  summary: {
+    available_loops: string[]
+    unavailable_loops: string[]
+    main_hints: string[]
+  }
+  loops: {
+    actuator?: ControlQualityLoop
+    rate?: ControlQualityLoop
+    attitude?: ControlQualityLoop
+    velocity?: ControlQualityLoop
+    position?: ControlQualityLoop
+  }
+  estimator_quality: Record<string, number | string | null>
+  missing_topics: string[]
+  missing_fields: Array<{
+    loop: string
+    axis: string
+    topic: string
+    fields: string[]
+  }>
+  warnings: string[]
+}
+
+export type ControlQualityPayload = {
+  logId: string
+  segment?: {
+    startS: number | null
+    endS: number | null
+    source?: string
+  }
+  format?: 'json' | 'csv'
+}

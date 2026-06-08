@@ -126,6 +126,30 @@ def resolve_quaternion_fields(data, field_candidates):
     return resolved
 
 
+def quaternion_to_euler_px4(q0, q1, q2, q3):
+    norm = math.sqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3)
+    if norm <= 1e-9:
+        return None
+
+    w = q0 / norm
+    x = q1 / norm
+    y = q2 / norm
+    z = q3 / norm
+
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2.0 * (w * y - z * x)
+    pitch = math.asin(max(-1.0, min(1.0, sinp)))
+
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+
+    return roll, pitch, yaw
+
+
 def derive_speed_from_local_position(ds):
     data = ds.data
     if "timestamp" not in data:
@@ -378,9 +402,10 @@ def append_vehicle_attitude(topic_charts, used_topics, attitude_ds):
             q2 = float(data[quaternion_fields["q2"]][i])
             q3 = float(data[quaternion_fields["q3"]][i])
 
-            roll = math.atan2(2.0 * (q0 * q1 + q2 * q3), 1.0 - 2.0 * (q1 * q1 + q2 * q2))
-            pitch = math.asin(max(-1.0, min(1.0, 2.0 * (q0 * q2 - q3 * q1))))
-            yaw = math.atan2(2.0 * (q0 * q3 + q1 * q2), 1.0 - 2.0 * (q2 * q2 + q3 * q3))
+            euler = quaternion_to_euler_px4(q0, q1, q2, q3)
+            if not euler:
+                continue
+            roll, pitch, yaw = euler
 
             roll_points.append([xs[i], round(math.degrees(roll), 3)])
             pitch_points.append([xs[i], round(math.degrees(pitch), 3)])
@@ -547,13 +572,10 @@ def append_vehicle_attitude_setpoint(topic_charts, used_topics, ds):
             q2 = float(data[quaternion_fields["q2"]][i])
             q3 = float(data[quaternion_fields["q3"]][i])
 
-            roll = math.atan2(
-                2.0 * (q0 * q1 + q2 * q3), 1.0 - 2.0 * (q1 * q1 + q2 * q2)
-            )
-            pitch = math.asin(max(-1.0, min(1.0, 2.0 * (q0 * q2 - q3 * q1))))
-            yaw = math.atan2(
-                2.0 * (q0 * q3 + q1 * q2), 1.0 - 2.0 * (q2 * q2 + q3 * q3)
-            )
+            euler = quaternion_to_euler_px4(q0, q1, q2, q3)
+            if not euler:
+                continue
+            roll, pitch, yaw = euler
 
             roll_points.append([xs[i], round(math.degrees(roll), 3)])
             pitch_points.append([xs[i], round(math.degrees(pitch), 3)])
@@ -608,6 +630,7 @@ def main():
         "estimator_innovation_variances",
         "estimator_innovation_test_ratios",
         "rate_ctrl_status",
+        "actuator_motors",
         "actuator_controls_0",
         "actuator_controls_3",
         "sensor_accel",

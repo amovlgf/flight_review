@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import BatchLogUpload from './components/BatchLogUpload'
 import ChartPanel from './components/ChartPanel'
+import ControlQualityPanel from './components/ControlQualityPanel'
 import type {
   ActiveLogMeta,
   ChartSelectionPreview,
@@ -14,7 +15,14 @@ import type {
 import LogSelector from './components/LogSelector'
 import TuningPanel from './components/TuningPanel'
 import UploadPanel from './components/UploadPanel'
-import { fetchChartData, fetchLogList, uploadLogFile } from './services/api'
+import {
+  calculateControlQuality,
+  exportControlQualityCsv,
+  fetchChartData,
+  fetchLogList,
+  uploadLogFile,
+} from './services/api'
+import type { ControlQualityReport } from './types/log'
 import type {
   TuningAxis,
   TuningSegmentQualityResult,
@@ -60,7 +68,7 @@ type ViewMode = 'upload' | 'chart'
 type ChartViewMode = 'pid' | 'normal'
 
 const PAGE_SIZE = 8
-const SHOW_SINGLE_LOG_UPLOAD = false
+const SHOW_SINGLE_LOG_UPLOAD = true
 const DEFAULT_TUNING_SEGMENT: TuningSegmentState = {
   startS: null,
   endS: null,
@@ -97,6 +105,16 @@ function timeValueToPercent(value: number, timeRange: ChartTimeRange) {
   const span = timeRange.end - timeRange.start
   if (span <= 0) return 0
   return clampPercent(((value - timeRange.start) / span) * 100)
+}
+
+function downloadTextFile(fileName: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 function isChartDisposed(chart: ChartInstance) {
@@ -140,6 +158,10 @@ function App() {
   const [selectionBox, setSelectionBox] = useState<ChartSelectionPreview | null>(
     null,
   )
+  const [controlQualityReport, setControlQualityReport] =
+    useState<ControlQualityReport | null>(null)
+  const [isControlQualityLoading, setIsControlQualityLoading] = useState(false)
+  const [controlQualityError, setControlQualityError] = useState('')
 
   const pidTrackingCharts = useMemo(
     () => buildPidAttitudeTrackingCharts(topicCharts),
@@ -291,6 +313,8 @@ function App() {
       setTopicCharts([])
       setModeSegments([])
       setDiagnostics([])
+      setControlQualityReport(null)
+      setControlQualityError('')
       setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
       setActiveLogMeta(null)
       setTuningSegment(DEFAULT_TUNING_SEGMENT)
@@ -315,6 +339,8 @@ function App() {
       setTopicCharts([])
       setModeSegments([])
       setDiagnostics([])
+      setControlQualityReport(null)
+      setControlQualityError('')
       setActiveLogMeta(null)
       setTuningSegment(DEFAULT_TUNING_SEGMENT)
       setSelectionBox(null)
@@ -334,8 +360,32 @@ function App() {
   const handleBackToUpload = () => {
     cleanupChartInteractions()
     setTuningSegment(DEFAULT_TUNING_SEGMENT)
+    setControlQualityReport(null)
+    setControlQualityError('')
     setViewMode('upload')
   }
+
+  const loadControlQuality = useCallback(
+    async (
+      logId: string,
+      segment?: { startS: number | null; endS: number | null; source?: string },
+    ) => {
+      try {
+        setIsControlQualityLoading(true)
+        setControlQualityError('')
+        const report = await calculateControlQuality({ logId, segment })
+        setControlQualityReport(report)
+      } catch {
+        setControlQualityReport(null)
+        setControlQualityError(
+          'Control-loop metrics failed. Please confirm the log is still available and contains PX4 control topics.',
+        )
+      } finally {
+        setIsControlQualityLoading(false)
+      }
+    },
+    [],
+  )
 
   const handleLoadChart = async () => {
     if (!selectedLogId) return
@@ -346,6 +396,8 @@ function App() {
         setSeriesData([])
         setTopicCharts([])
         setModeSegments([])
+        setControlQualityReport(null)
+        setControlQualityError('')
         setChartHint(
           `\u5df2\u8c03\u7528\u56fe\u8868\u63a5\u53e3\uff08logId: ${selectedLogId}\uff09\uff1a\u5f53\u524d\u8fd4\u56de\u7a7a\u6570\u636e\uff08\u5360\u4f4d\uff09`,
         )
@@ -383,10 +435,13 @@ function App() {
           ? '\u5df2\u52a0\u8f7d\u56fe\u8868\u6570\u636e\uff08\u5f53\u524d\u4e3a\u57fa\u4e8e ULog \u5934\u90e8\u7279\u5f81\u7684\u6f14\u793a\u65f6\u5e8f\uff09'
           : '\u5df2\u52a0\u8f7d\u56fe\u8868\u6570\u636e\uff08\u6765\u81ea PX4 \u4e3b\u9898\u89e3\u6790\uff09'
       )
+      await loadControlQuality(selectedLogId)
     } catch {
       setSeriesData([])
       setTopicCharts([])
       setModeSegments([])
+      setControlQualityReport(null)
+      setControlQualityError('')
       setActiveLogMeta(null)
       setTuningSegment(DEFAULT_TUNING_SEGMENT)
       setSelectionBox(null)
@@ -403,6 +458,8 @@ function App() {
     setTopicCharts([])
     setModeSegments([])
     setDiagnostics([])
+    setControlQualityReport(null)
+    setControlQualityError('')
     setActiveLogMeta(null)
     setTuningSegment(DEFAULT_TUNING_SEGMENT)
     setSelectionBox(null)
@@ -413,10 +470,51 @@ function App() {
     }
   }
 
+  const handleApplyControlQualityRange = async (
+    startS: number | null,
+    endS: number | null,
+  ) => {
+    if (!selectedLogId) return
+    const segment = {
+      startS,
+      endS,
+      source: startS !== null && endS !== null ? 'manual' : 'auto',
+    }
+    setTuningSegment({
+      startS,
+      endS,
+      source: segment.source === 'manual' ? 'manual' : 'default',
+    })
+    await loadControlQuality(selectedLogId, segment)
+  }
+
+  const handleExportControlQualityCsv = async () => {
+    if (!selectedLogId || !controlQualityReport) return
+    const csv = await exportControlQualityCsv({
+      logId: selectedLogId,
+      segment: {
+        startS: controlQualityReport.analysis_time_range.start_s,
+        endS: controlQualityReport.analysis_time_range.end_s,
+        source: controlQualityReport.analysis_time_range.source,
+      },
+    })
+    const fileStem = (controlQualityReport.log_file || 'control-quality').replace(
+      /[^a-z0-9_.-]+/gi,
+      '_',
+    )
+    downloadTextFile(
+      `${fileStem}.control-quality.csv`,
+      csv,
+      'text/csv;charset=utf-8',
+    )
+  }
+
   const handleSearch = async () => {
     await loadLogList({ page: 1, keyword: searchKeyword })
     setSeriesData([])
     setDiagnostics([])
+    setControlQualityReport(null)
+    setControlQualityError('')
     setActiveLogMeta(null)
     setChartHint('\u65e5\u5fd7\u5217\u8868\u5df2\u66f4\u65b0\uff0c\u8bf7\u9009\u62e9\u65e5\u5fd7\u540e\u6253\u5f00\u56fe\u8868\u3002')
   }
@@ -820,6 +918,13 @@ function App() {
               tuningSegment={tuningSegment}
               segmentQuality={segmentQuality}
               onTuningSegmentChange={setTuningSegment}
+            />
+            <ControlQualityPanel
+              report={controlQualityReport}
+              isLoading={isControlQualityLoading}
+              errorText={controlQualityError}
+              onApplyRange={handleApplyControlQualityRange}
+              onExportCsv={handleExportControlQualityCsv}
             />
             <div className="chart-view-toolbar">
               <div className="chart-view-row">

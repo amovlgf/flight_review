@@ -233,3 +233,96 @@ type ModeSegment = {
 4. 建议将 `dataSource` 收敛为固定枚举，避免前端对任意字符串做判断。
 5. 建议诊断文案分离为结构化字段，例如 `params` 保存数值与单位，前端负责国际化展示，避免通过字符串替换生成中文。
 6. 建议明确所有 topic 的时间轴基准。当前不同 topic 可能各自从 0 秒开始，后续做多图联动时需要确认是否要统一到日志全局时间。
+## POST /api/logs/control-quality
+
+This endpoint computes current-log control-loop metrics from the already uploaded
+and parsed PX4 ULog topics. It does not use a baseline log, does not compare
+different aircraft, and does not output an absolute pass/fail score.
+
+### Request
+
+```http
+POST /api/logs/control-quality
+Content-Type: application/json
+```
+
+```ts
+type ControlQualityRequest = {
+  logId: string;
+  segment?: {
+    startS: number | null;
+    endS: number | null;
+    source?: 'manual' | 'auto' | string;
+  };
+  format?: 'json' | 'csv';
+};
+```
+
+When `segment` is omitted, the backend uses the available topic time range and
+excludes the first and last 5 percent as a conservative default analysis range.
+
+### JSON Response
+
+```ts
+type ControlQualityReport = {
+  log_file: string;
+  analysis_time_range: {
+    start_s: number | null;
+    end_s: number | null;
+    source: string;
+  };
+  summary: {
+    available_loops: string[];
+    unavailable_loops: string[];
+    main_hints: string[];
+  };
+  loops: {
+    actuator?: ControlQualityLoop;
+    rate?: ControlQualityLoop;
+    attitude?: ControlQualityLoop;
+    velocity?: ControlQualityLoop;
+    position?: ControlQualityLoop;
+  };
+  estimator_quality: Record<string, number | string | null>;
+  missing_topics: string[];
+  missing_fields: Array<{
+    loop: string;
+    axis: string;
+    topic: string;
+    fields: string[];
+  }>;
+  warnings: string[];
+};
+```
+
+Loop order is always inner-to-outer:
+
+```text
+actuator -> rate -> attitude -> velocity -> position -> estimator_quality -> hints
+```
+
+Each available axis exposes at least:
+
+```text
+mae, rmse, max_error, p95_error, p99_error, signal_scale, nrmse,
+delay_s, delay_status, zero_crossing_count, error_diff_std,
+setpoint_range, setpoint_diff_std, overshoot_ratio, overshoot_status
+```
+
+Unavailable data is represented by status strings such as:
+
+```text
+topic_missing, field_missing, not_enough_data, not_enough_excitation
+```
+
+### CSV Response
+
+Set `format` to `csv` to receive a flat metric table suitable for Excel-based
+manual comparison across logs from the same aircraft:
+
+```text
+log_file,time_start_s,time_end_s,loop,axis,unit,mae,rmse,nrmse,...
+```
+
+The CSV is intended for manual review. It is not a ranking table and does not
+contain baseline thresholds.

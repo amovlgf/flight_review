@@ -116,3 +116,26 @@ npm run dev
 13. 角色视图测试：
    - 在功能 2 顶部切换“客户视图 / 售后视图 / 研发视图”
    - 重新点击“打开图表模块”，确认可见话题数量与内容随角色变化
+
+## Control Loop Quality Analysis
+
+The app now includes a Control Loop Quality panel for one uploaded PX4 `.ulg` log. This feature only computes metrics for the current log. It does not use a baseline log, does not compare different aircraft, and does not turn fixed thresholds into absolute pass/fail conclusions.
+
+Workflow:
+
+1. Upload one `.ulg` log from the upload page.
+2. Open the chart module after upload.
+3. Review the Control Loop Quality panel in inner-to-outer order: actuator, rate, attitude, velocity, position.
+4. Enter `start_s` and `end_s`, then click `Recalculate` to recompute all metrics for a selected time range.
+5. Export the current log metrics as JSON, CSV, or HTML.
+
+Core metrics:
+
+- `RMSE`: overall tracking error.
+- `NRMSE`: range-normalized error for manual comparison across logs from the same aircraft.
+- `Max Error`, `P95 Error`, `P99 Error`: peak and high-percentile tracking error.
+- `Delay`: estimated setpoint-to-feedback time offset from normalized cross-correlation.
+- `Zero Crossing`: error sign-change count for oscillation observation.
+- `Setpoint Range`: command amplitude in the selected range.
+
+The exported CSV is intended for Excel or external-table review of logs from the same aircraft, for example before and after parameter changes.

@@ -1,6 +1,8 @@
 import type {
   BatchAnalyzeLogsResponse,
   ChartDataResponse,
+  ControlQualityPayload,
+  ControlQualityReport,
   FetchLogListParams,
   LogListResponse,
   UploadLogResponse,
@@ -107,6 +109,42 @@ export async function fetchLogList(
   }
 
   return response.json()
+}
+
+export async function calculateControlQuality(
+  payload: ControlQualityPayload,
+): Promise<ControlQualityReport> {
+  const response = await fetch(`${API_BASE_URL}/logs/control-quality`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ...payload, format: 'json' }),
+  })
+
+  if (!response.ok) {
+    throw new Error('CONTROL_QUALITY_FAILED')
+  }
+
+  return response.json()
+}
+
+export async function exportControlQualityCsv(
+  payload: ControlQualityPayload,
+): Promise<string> {
+  const response = await fetch(`${API_BASE_URL}/logs/control-quality`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ...payload, format: 'csv' }),
+  })
+
+  if (!response.ok) {
+    throw new Error('CONTROL_QUALITY_CSV_FAILED')
+  }
+
+  return response.text()
 }
 
 export async function calculateTuningMetrics(

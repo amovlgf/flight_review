@@ -10,6 +10,10 @@ const {
 } = require('./services/logParserService');
 const { hasUnlockedFlight } = require('./services/unlockFlightService');
 const {
+  buildControlQualityReport,
+  flattenControlQualityCsv,
+} = require('./services/controlQualityService');
+const {
   VALID_TUNING_AXES,
   VALID_TUNING_LOOPS,
   computeTuningMetrics,
@@ -238,6 +242,40 @@ app.get('/api/logs/chart-data', (req, res) => {
     topicCharts: filteredTopicCharts,
     diagnostics: stored.diagnostics,
   });
+});
+
+app.post('/api/logs/control-quality', (req, res) => {
+  const logId = typeof req.body?.logId === 'string' ? req.body.logId.trim() : '';
+  const segment =
+    req.body?.segment && typeof req.body.segment === 'object'
+      ? req.body.segment
+      : undefined;
+  const format =
+    typeof req.body?.format === 'string' ? req.body.format.trim().toLowerCase() : 'json';
+
+  if (!logId) {
+    return res.status(400).json({
+      message: 'logId is required.',
+    });
+  }
+
+  const stored = parsedLogStore.get(logId);
+  if (!stored) {
+    return res.status(404).json({
+      message: 'Log not found. Please upload first.',
+      logId,
+    });
+  }
+
+  ensureStoredLogParsed(stored);
+  const report = buildControlQualityReport(stored, { segment });
+
+  if (format === 'csv') {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    return res.send(flattenControlQualityCsv(report));
+  }
+
+  return res.json(report);
 });
 
 app.post('/api/tuning/metrics', (req, res) => {
