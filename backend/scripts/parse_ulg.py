@@ -220,11 +220,14 @@ def append_euler_triplet_if_exists(series_list, data, field_candidates, name_map
 def is_numeric_series(values):
     if values is None or len(values) == 0:
         return False
-    try:
-        sample = float(values[0])
-    except Exception:
-        return False
-    return not (math.isnan(sample) or math.isinf(sample))
+    for value in values:
+        try:
+            sample = float(value)
+        except Exception:
+            continue
+        if not math.isnan(sample) and not math.isinf(sample):
+            return True
+    return False
 
 
 def has_truthy_sample(values):

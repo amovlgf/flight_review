@@ -33,7 +33,7 @@ function UploadPanel({
 
   return (
     <section className="card">
-      <h2>{'\u529f\u80fd 1\uff1a\u4e0a\u4f20\u98de\u884c\u65e5\u5fd7'}</h2>
+      <h2>{'\u529f\u80fd 1\uff1a\u65e5\u5fd7\u4e0a\u4f20\u5206\u6790'}</h2>
       <ul>
         <li>{'\u524d\u7aef\u4e0a\u4f20\u5165\u53e3'}</li>
         <li>{'\u540e\u7aef\u6587\u4ef6\u63a5\u6536\u63a5\u53e3'}</li>

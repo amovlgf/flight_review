@@ -17,7 +17,6 @@ type LogSelectorProps = {
   onRefreshLogList: () => void
   onPrevPage: () => void
   onNextPage: () => void
-  onLoadChart: () => void
 }
 
 function LogSelector({
@@ -33,7 +32,6 @@ function LogSelector({
   onRefreshLogList,
   onPrevPage,
   onNextPage,
-  onLoadChart,
 }: LogSelectorProps) {
   return (
     <>
@@ -88,17 +86,6 @@ function LogSelector({
           {`\u7b2c ${listPage} / ${listPageCount} \u9875\uff0c\u5171 ${listTotal} \u6761`}
         </p>
       </div>
-
-      <button
-        type="button"
-        className="button"
-        onClick={onLoadChart}
-        disabled={!selectedLogId}
-      >
-        {selectedLogId
-          ? '\u6253\u5f00\u56fe\u8868\u6a21\u5757'
-          : '\u8bf7\u5148\u4e0a\u4f20\u6216\u9009\u62e9\u5386\u53f2\u65e5\u5fd7'}
-      </button>
     </>
   )
 }

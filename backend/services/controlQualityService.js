@@ -36,36 +36,36 @@ const FIELD_CANDIDATES = {
     yaw: { sp: ['yaw_sp'], fb: ['yaw'], unit: 'deg', wrap: true },
   },
   velocity: {
-    vx: { sp: ['vx'], fb: ['vx'], unit: 'm/s' },
-    vy: { sp: ['vy'], fb: ['vy'], unit: 'm/s' },
-    vz: { sp: ['vz'], fb: ['vz'], unit: 'm/s' },
+    vx: { sp: ['vx', 'velocity[0]', 'velocity.00', 'velocity_0'], fb: ['vx'], unit: 'm/s' },
+    vy: { sp: ['vy', 'velocity[1]', 'velocity.01', 'velocity_1'], fb: ['vy'], unit: 'm/s' },
+    vz: { sp: ['vz', 'velocity[2]', 'velocity.02', 'velocity_2'], fb: ['vz'], unit: 'm/s' },
   },
   position: {
-    x: { sp: ['x'], fb: ['x'], unit: 'm' },
-    y: { sp: ['y'], fb: ['y'], unit: 'm' },
-    z: { sp: ['z'], fb: ['z'], unit: 'm' },
+    x: { sp: ['x', 'position[0]', 'position.00', 'position_0'], fb: ['x'], unit: 'm' },
+    y: { sp: ['y', 'position[1]', 'position.01', 'position_1'], fb: ['y'], unit: 'm' },
+    z: { sp: ['z', 'position[2]', 'position.02', 'position_2'], fb: ['z'], unit: 'm' },
   },
 };
 
 const LOOP_TOPIC_MAP = {
   rate: {
-    sp: 'vehicle_rates_setpoint',
-    fb: 'vehicle_angular_velocity',
+    sp: ['vehicle_rates_setpoint'],
+    fb: ['vehicle_angular_velocity'],
     maxDelayS: 0.3,
   },
   attitude: {
-    sp: 'vehicle_attitude_setpoint',
-    fb: 'vehicle_attitude',
+    sp: ['vehicle_attitude_setpoint'],
+    fb: ['vehicle_attitude'],
     maxDelayS: 0.5,
   },
   velocity: {
-    sp: 'vehicle_local_position_setpoint',
-    fb: 'vehicle_local_position',
+    sp: ['vehicle_local_position_setpoint'],
+    fb: ['vehicle_local_position'],
     maxDelayS: 1.0,
   },
   position: {
-    sp: 'vehicle_local_position_setpoint',
-    fb: 'vehicle_local_position',
+    sp: ['vehicle_local_position_setpoint'],
+    fb: ['vehicle_local_position'],
     maxDelayS: 2.0,
   },
 };
@@ -83,8 +83,23 @@ function normalizeName(name) {
   return String(name || '').trim().toLowerCase();
 }
 
-function findTopic(topicCharts, topicName) {
-  return (topicCharts || []).find((chart) => chart && chart.topic === topicName);
+function toArray(value) {
+  return Array.isArray(value) ? value : [value];
+}
+
+function findTopic(topicCharts, topicNames) {
+  return findTopics(topicCharts, topicNames)[0] || null;
+}
+
+function findTopics(topicCharts, topicNames) {
+  const candidates = toArray(topicNames).filter(Boolean);
+  return (topicCharts || []).filter((chart) =>
+    candidates.some(
+      (topicName) =>
+        chart &&
+        (chart.topic === topicName || String(chart.topic || '').startsWith(`${topicName}_`)),
+    ),
+  );
 }
 
 function findSeries(topic, candidates) {
@@ -95,6 +110,14 @@ function findSeries(topic, candidates) {
       normalizedCandidates.includes(normalizeName(series?.name)),
     ) || null
   );
+}
+
+function findSeriesInTopics(topics, candidates) {
+  for (const topic of topics) {
+    const series = findSeries(topic, candidates);
+    if (series) return { topic, series };
+  }
+  return null;
 }
 
 function normalizePoints(points) {
@@ -377,14 +400,15 @@ function computeTrackingMetrics(aligned, maxDelayS) {
 
 function computeLoop(topicCharts, loopName, segment, missingFields) {
   const topicNames = LOOP_TOPIC_MAP[loopName];
-  const setpointTopic = findTopic(topicCharts, topicNames.sp);
-  const feedbackTopic = findTopic(topicCharts, topicNames.fb);
-  if (!setpointTopic || !feedbackTopic) {
+  const setpointTopics = findTopics(topicCharts, topicNames.sp);
+  const feedbackTopics = findTopics(topicCharts, topicNames.fb);
+  if (!setpointTopics.length || !feedbackTopics.length) {
+    const missingTopic = !setpointTopics.length ? toArray(topicNames.sp).join(' 或 ') : toArray(topicNames.fb).join(' 或 ');
     return {
       status: 'topic_missing',
       axis: {},
       charts: [],
-      notes: [`Missing ${!setpointTopic ? topicNames.sp : topicNames.fb}.`],
+      notes: [`缺少 ${missingTopic}。`],
     };
   }
 
@@ -392,14 +416,14 @@ function computeLoop(topicCharts, loopName, segment, missingFields) {
   const charts = [];
   const notes = [];
   for (const [axisName, mapping] of Object.entries(FIELD_CANDIDATES[loopName])) {
-    const spSeries = findSeries(setpointTopic, mapping.sp);
-    const fbSeries = findSeries(feedbackTopic, mapping.fb);
-    if (!spSeries || !fbSeries) {
+    const spMatch = findSeriesInTopics(setpointTopics, mapping.sp);
+    const fbMatch = findSeriesInTopics(feedbackTopics, mapping.fb);
+    if (!spMatch || !fbMatch) {
       missingFields.push({
         loop: loopName,
         axis: axisName,
-        topic: !spSeries ? topicNames.sp : topicNames.fb,
-        fields: !spSeries ? mapping.sp : mapping.fb,
+        topic: !spMatch ? setpointTopics.map((topic) => topic.topic).join(' 或 ') : feedbackTopics.map((topic) => topic.topic).join(' 或 '),
+        fields: !spMatch ? mapping.sp : mapping.fb,
       });
       axis[axisName] = {
         status: 'field_missing',
@@ -410,8 +434,8 @@ function computeLoop(topicCharts, loopName, segment, missingFields) {
     }
 
     const aligned = alignSeries({
-      setpointSeries: spSeries,
-      feedbackSeries: fbSeries,
+      setpointSeries: spMatch.series,
+      feedbackSeries: fbMatch.series,
       segment,
       wrapError: mapping.wrap === true,
     });
@@ -453,8 +477,10 @@ function isActuatorSeries(series) {
   return (
     name.startsWith('control[') ||
     name.startsWith('control.') ||
+    name.startsWith('control_') ||
     name.startsWith('output[') ||
-    name.startsWith('output.')
+    name.startsWith('output.') ||
+    name.startsWith('output_')
   );
 }
 
@@ -466,7 +492,7 @@ function computeActuator(topicCharts, segment) {
       metrics: {},
       channels: [],
       chart: [],
-      notes: ['Missing actuator_motors, actuator_outputs, or actuator_controls_0.'],
+      notes: ['缺少 actuator_motors、actuator_outputs 或 actuator_controls_0。'],
     };
   }
 
@@ -503,7 +529,7 @@ function computeActuator(topicCharts, segment) {
       metrics: {},
       channels: [],
       chart: [],
-      notes: ['Actuator topic exists but has no usable output channel in this range.'],
+      notes: ['执行器 topic 存在，但当前区间没有可用输出通道。'],
     };
   }
 
@@ -633,7 +659,7 @@ function buildHints(report) {
     positionXy.nrmse > velocityNrmse * 1.5
   ) {
     hints.push(
-      'Position tracking error is more prominent than velocity tracking. Review position setpoint smoothness and local position jumps.',
+      '位置跟踪误差相对更明显，建议检查位置期望值是否平滑，以及本地位置反馈是否存在跳变。',
     );
   }
 
@@ -643,7 +669,7 @@ function buildHints(report) {
     (isFiniteNumber(actuator.sat_low_ratio) && actuator.sat_low_ratio > 0)
   ) {
     hints.push(
-      'Actuator output reaches the reference saturation band in this log. Treat inner-loop conclusions with reduced confidence.',
+      '执行器输出触及参考饱和区间，内环结论需要降低可信度。',
     );
   }
 
@@ -653,12 +679,12 @@ function buildHints(report) {
     (estimator.velocity_spike_count || 0) > 0
   ) {
     hints.push(
-      'Feedback jumps or spikes were detected. Control-loop metrics may be affected by estimator or sensor data quality.',
+      '反馈数据存在跳变或尖峰，控制环指标可能受到估计器或传感器数据质量影响。',
     );
   }
 
   if (!hints.length) {
-    hints.push('No cross-loop phenomenon hint was generated from the available metrics.');
+    hints.push('当前可用指标未生成跨环路现象提示。');
   }
 
   return hints;

@@ -191,6 +191,42 @@ test('parse_ulg.py prefers direct Euler fields for attitude and setpoint when av
   );
 });
 
+test('parse_ulg.py keeps local position setpoint fields when early samples are NaN', () => {
+  const payload = runParserWithDatasets([
+    {
+      name: 'vehicle_local_position_setpoint',
+      multi_id: 0,
+      data: {
+        timestamp: [0, 1_000_000, 2_000_000],
+        x: ['nan', 1, 2],
+        y: ['nan', -1, -2],
+        z: ['nan', -2, -3],
+        vx: ['nan', 0.1, 0.2],
+        vy: ['nan', -0.1, -0.2],
+        vz: ['nan', 0.3, 0.4],
+        yaw: [0, 0.1, 0.2],
+      },
+    },
+  ]);
+
+  const setpointTopic = findTopicChart(payload, 'vehicle_local_position_setpoint_0');
+  const names = setpointTopic.series.map((item) => item.name);
+
+  assert.ok(names.includes('x'));
+  assert.ok(names.includes('y'));
+  assert.ok(names.includes('z'));
+  assert.ok(names.includes('vx'));
+  assert.ok(names.includes('vy'));
+  assert.ok(names.includes('vz'));
+  assert.deepEqual(
+    setpointTopic.series.find((item) => item.name === 'x')?.points,
+    [
+      [1, 1],
+      [2, 2],
+    ],
+  );
+});
+
 test('parse_ulg.py reports unlock summary from actuator_armed.armed', () => {
   const payload = runParserWithDatasets([
     {

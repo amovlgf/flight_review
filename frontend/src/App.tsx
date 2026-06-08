@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ChangeEvent } from 'react'
 import './App.css'
 import BatchLogUpload from './components/BatchLogUpload'
 import ChartPanel from './components/ChartPanel'
@@ -13,7 +14,6 @@ import type {
   TopicChart,
 } from './components/ChartPanel'
 import LogSelector from './components/LogSelector'
-import TuningPanel from './components/TuningPanel'
 import UploadPanel from './components/UploadPanel'
 import {
   calculateControlQuality,
@@ -23,20 +23,10 @@ import {
   uploadLogFile,
 } from './services/api'
 import type { ControlQualityReport } from './types/log'
-import type {
-  TuningAxis,
-  TuningSegmentQualityResult,
-  TuningSegmentState,
-} from './types/tuning'
-import {
-  buildPidAttitudeTrackingCharts,
-  getPidAxisTrackingSeries,
-} from './utils/pidAttitudeTracking'
 import {
   isValidSelectionBox,
   normalizeSelectionBox,
 } from './utils/selectionBox'
-import { evaluatePidSegmentQuality } from './utils/segmentQuality'
 
 type ChartAction = {
   type: string
@@ -64,33 +54,10 @@ type ChartRegistryItem = {
   timeRange: ChartTimeRange
 }
 
-type ViewMode = 'upload' | 'chart'
-type ChartViewMode = 'pid' | 'normal'
+type ViewMode = 'home' | 'log-analysis' | 'batch' | 'control-analysis'
+type LogAnalysisStep = 'upload' | 'chart'
 
 const PAGE_SIZE = 8
-const SHOW_SINGLE_LOG_UPLOAD = true
-const DEFAULT_TUNING_SEGMENT: TuningSegmentState = {
-  startS: null,
-  endS: null,
-  source: 'default',
-}
-
-const DEFAULT_SEGMENT_QUALITY: TuningSegmentQualityResult = {
-  status: 'unknown',
-  score: 0,
-  summary: '暂无片段质量评分。',
-  reasons: ['当前还没有可用于分析的片段。'],
-  recommendations: ['请先在图表中框选一个分析片段。'],
-  metrics: {
-    durationS: null,
-    setpointRangeDeg: null,
-    actualRangeDeg: null,
-    sampleCount: 0,
-    rmsErrorDeg: null,
-    peakErrorDeg: null,
-  },
-}
-
 function clampPercent(value: number) {
   return Math.min(Math.max(value, 0), 100)
 }
@@ -148,13 +115,15 @@ function App() {
   const [listPage, setListPage] = useState(1)
   const [listPageCount, setListPageCount] = useState(1)
   const [listTotal, setListTotal] = useState(0)
-  const [viewMode, setViewMode] = useState<ViewMode>('upload')
-  const [chartViewMode, setChartViewMode] = useState<ChartViewMode>('pid')
-  const [selectedTuningAxis, setSelectedTuningAxis] =
-    useState<TuningAxis>('roll')
-  const [tuningSegment, setTuningSegment] = useState<TuningSegmentState>(
-    DEFAULT_TUNING_SEGMENT,
-  )
+  const [viewMode, setViewMode] = useState<ViewMode>('home')
+  const [logAnalysisStep, setLogAnalysisStep] =
+    useState<LogAnalysisStep>('upload')
+  const controlAnalysisFileInputRef = useRef<HTMLInputElement | null>(null)
+  const [controlAnalysisFileName, setControlAnalysisFileName] = useState('')
+  const [isControlAnalysisUploading, setIsControlAnalysisUploading] =
+    useState(false)
+  const [controlAnalysisStatusText, setControlAnalysisStatusText] = useState('')
+  const [controlAnalysisLogId, setControlAnalysisLogId] = useState('')
   const [selectionBox, setSelectionBox] = useState<ChartSelectionPreview | null>(
     null,
   )
@@ -162,79 +131,6 @@ function App() {
     useState<ControlQualityReport | null>(null)
   const [isControlQualityLoading, setIsControlQualityLoading] = useState(false)
   const [controlQualityError, setControlQualityError] = useState('')
-
-  const pidTrackingCharts = useMemo(
-    () => buildPidAttitudeTrackingCharts(topicCharts),
-    [topicCharts],
-  )
-
-  const visibleTopicCharts = useMemo(
-    () => (chartViewMode === 'pid' ? pidTrackingCharts : topicCharts),
-    [chartViewMode, pidTrackingCharts, topicCharts],
-  )
-
-  const visibleSeriesData = useMemo(
-    () => (chartViewMode === 'normal' ? seriesData : []),
-    [chartViewMode, seriesData],
-  )
-
-  const visibleDiagnostics = useMemo(
-    () => (chartViewMode === 'normal' ? diagnostics : []),
-    [chartViewMode, diagnostics],
-  )
-
-  const activePidChartTopic = useMemo(
-    () =>
-      chartViewMode === 'pid'
-        ? `pid_${selectedTuningAxis}_angle_tracking`
-        : undefined,
-    [chartViewMode, selectedTuningAxis],
-  )
-
-  const segmentQuality = useMemo(() => {
-    const { actualSeries, setpointSeries } = getPidAxisTrackingSeries(
-      pidTrackingCharts,
-      selectedTuningAxis,
-    )
-
-    if (actualSeries.length === 0 || setpointSeries.length === 0) {
-      return {
-        ...DEFAULT_SEGMENT_QUALITY,
-        reasons: ['当前日志缺少可用于片段质量评分的 PID 跟踪数据。'],
-        recommendations: ['请切换到包含姿态跟踪数据的日志，或改用常规视图检查原始数据。'],
-      }
-    }
-
-    const result = evaluatePidSegmentQuality({
-      axis: selectedTuningAxis,
-      startS: tuningSegment.startS,
-      endS: tuningSegment.endS,
-      actualSeries,
-      setpointSeries,
-    })
-
-    return result ?? DEFAULT_SEGMENT_QUALITY
-  }, [pidTrackingCharts, selectedTuningAxis, tuningSegment.endS, tuningSegment.startS])
-
-  const chartViewDescription = useMemo(
-    () =>
-      chartViewMode === 'pid'
-        ? '\u5f53\u524d PID \u89c6\u56fe\u4ec5\u663e\u793a roll / pitch / yaw \u4e09\u8f74\u7684\u671f\u671b\u89d2\u5ea6\u4e0e\u5b9e\u9645\u89d2\u5ea6\u8ddf\u968f\u66f2\u7ebf\u3002'
-        : '\u5f53\u524d\u663e\u793a\u65e5\u5fd7\u4e2d\u7684\u5e38\u89c4\u56fe\u8868\u6570\u636e\uff0c\u540e\u7eed\u5c06\u7ee7\u7eed\u4f18\u5316\u5206\u7c7b\u4e0e\u5e03\u5c40\u3002',
-    [chartViewMode],
-  )
-
-  const chartEmptyStateMessage = useMemo(() => {
-    if (
-      activeLogMeta &&
-      chartViewMode === 'pid' &&
-      visibleTopicCharts.length === 0
-    ) {
-      return '\u5f53\u524d\u65e5\u5fd7\u7f3a\u5c11\u59ff\u6001\u6216\u59ff\u6001\u671f\u671b\u56db\u5143\u6570\u6570\u636e\uff0c\u65e0\u6cd5\u751f\u6210 PID \u89d2\u5ea6\u8ddf\u968f\u89c6\u56fe\u3002\u53ef\u5207\u6362\u5230\u5e38\u89c4\u89c6\u56fe\u67e5\u770b\u539f\u59cb\u6570\u636e\u3002'
-    }
-
-    return undefined
-  }, [activeLogMeta, chartViewMode, visibleTopicCharts])
 
   const loadLogList = async (options?: {
     preferLogId?: string
@@ -317,7 +213,6 @@ function App() {
       setControlQualityError('')
       setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
       setActiveLogMeta(null)
-      setTuningSegment(DEFAULT_TUNING_SEGMENT)
       setSelectionBox(null)
       const uploadResult = await uploadLogFile(file)
       const logId =
@@ -328,11 +223,14 @@ function App() {
         setSelectedLogId(logId)
       }
       await loadLogList({ preferLogId: logId, page: 1, keyword: '' })
-      setViewMode('chart')
+      setLogAnalysisStep('chart')
+      if (logId) {
+        await loadChartForLog(logId)
+      }
       setStatusText(
         logId
-          ? `\u4e0a\u4f20\u6210\u529f\uff0c\u529f\u80fd 2 \u5df2\u89e3\u9501\uff08logId: ${logId}\uff09\u3002`
-          : '\u4e0a\u4f20\u6210\u529f\uff0c\u529f\u80fd 2 \u5df2\u89e3\u9501\u3002',
+          ? `\u4e0a\u4f20\u6210\u529f\uff08logId: ${logId}\uff09\uff0c\u56fe\u8868\u5df2\u81ea\u52a8\u52a0\u8f7d\u3002`
+          : '\u4e0a\u4f20\u6210\u529f\u3002',
       )
     } catch {
       setSeriesData([])
@@ -342,7 +240,6 @@ function App() {
       setControlQualityReport(null)
       setControlQualityError('')
       setActiveLogMeta(null)
-      setTuningSegment(DEFAULT_TUNING_SEGMENT)
       setSelectionBox(null)
       setStatusText('\u4e0a\u4f20\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u540e\u7aef\u662f\u5426\u542f\u52a8\u3002')
     } finally {
@@ -357,41 +254,114 @@ function App() {
     setSelectionBox(null)
   }, [])
 
-  const handleBackToUpload = () => {
+  const handleBackToHome = () => {
     cleanupChartInteractions()
-    setTuningSegment(DEFAULT_TUNING_SEGMENT)
     setControlQualityReport(null)
     setControlQualityError('')
-    setViewMode('upload')
+    setViewMode('home')
   }
 
-  const loadControlQuality = useCallback(
-    async (
-      logId: string,
-      segment?: { startS: number | null; endS: number | null; source?: string },
-    ) => {
-      try {
-        setIsControlQualityLoading(true)
-        setControlQualityError('')
-        const report = await calculateControlQuality({ logId, segment })
-        setControlQualityReport(report)
-      } catch {
-        setControlQualityReport(null)
-        setControlQualityError(
-          'Control-loop metrics failed. Please confirm the log is still available and contains PX4 control topics.',
-        )
-      } finally {
-        setIsControlQualityLoading(false)
-      }
-    },
-    [],
-  )
+  const handleBackToLogUpload = () => {
+    cleanupChartInteractions()
+    setLogAnalysisStep('upload')
+  }
 
-  const handleLoadChart = async () => {
-    if (!selectedLogId) return
+  const handleEnterLogAnalysis = () => {
+    setViewMode('log-analysis')
+    setLogAnalysisStep('upload')
+  }
+
+  const handleEnterBatchAnalysis = () => {
+    setViewMode('batch')
+  }
+
+  const handleEnterControlAnalysis = () => {
+    setViewMode('control-analysis')
+    setControlQualityReport(null)
+    setControlQualityError('')
+    setControlAnalysisLogId('')
+    setControlAnalysisStatusText('')
+    setControlAnalysisFileName('')
+  }
+
+  const handleChooseControlAnalysisFile = () => {
+    controlAnalysisFileInputRef.current?.click()
+  }
+
+  const handleControlAnalysisFileChange = (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setControlAnalysisFileName(file.name)
+    setControlAnalysisStatusText(
+      '\u5df2\u9009\u62e9\u63a7\u5236\u73af\u8def\u5206\u6790\u65e5\u5fd7\uff0c\u8bf7\u70b9\u51fb\u4e0a\u4f20\u65e5\u5fd7\u6587\u4ef6\u3002',
+    )
+  }
+
+  const handleUploadControlAnalysisLog = async () => {
+    const file = controlAnalysisFileInputRef.current?.files?.[0] ?? null
+    if (!file) {
+      setControlAnalysisStatusText(
+        '\u8bf7\u5148\u9009\u62e9\u7528\u4e8e\u63a7\u5236\u73af\u8def\u5206\u6790\u7684 .ulg \u65e5\u5fd7\u3002',
+      )
+      return
+    }
 
     try {
-      const data = await fetchChartData(selectedLogId)
+      setIsControlAnalysisUploading(true)
+      setControlAnalysisStatusText(
+        '\u6b63\u5728\u4e0a\u4f20\u65e5\u5fd7\u5e76\u8ba1\u7b97\u63a7\u5236\u73af\u6307\u6807...',
+      )
+      setControlQualityReport(null)
+      setControlQualityError('')
+      setControlAnalysisLogId('')
+
+      const uploadResult = await uploadLogFile(file)
+      const logId =
+        uploadResult && typeof uploadResult.logId === 'string'
+          ? uploadResult.logId
+          : ''
+      if (!logId) throw new Error('LOG_ID_MISSING')
+
+      setControlAnalysisLogId(logId)
+      await loadControlQuality(logId)
+      setControlAnalysisStatusText(
+        `\u65e5\u5fd7\u5df2\u4e0a\u4f20\u5e76\u5b8c\u6210\u63a7\u5236\u73af\u5206\u6790\uff08\u65e5\u5fd7\u7f16\u53f7\uff1a${logId}\uff09\u3002`,
+      )
+    } catch {
+      setControlAnalysisStatusText(
+        '\u65e5\u5fd7\u4e0a\u4f20\u6216\u63a7\u5236\u73af\u5206\u6790\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u540e\u7aef\u548c .ulg \u6587\u4ef6\u3002',
+      )
+    } finally {
+      setIsControlAnalysisUploading(false)
+    }
+  }
+
+  const loadControlQuality = async (
+    logId: string,
+    segment?: { startS: number | null; endS: number | null; source?: string },
+  ) => {
+    try {
+      setIsControlQualityLoading(true)
+      setControlQualityError('')
+      const report = await calculateControlQuality({ logId, segment })
+      setControlQualityReport(report)
+    } catch {
+      setControlQualityReport(null)
+      setControlQualityError(
+        '\u63a7\u5236\u73af\u6307\u6807\u8ba1\u7b97\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u65e5\u5fd7\u5305\u542b PX4 \u63a7\u5236\u76f8\u5173 topic\u3002',
+      )
+    } finally {
+      setIsControlQualityLoading(false)
+    }
+  }
+
+  const loadChartForLog = async (logId: string) => {
+    if (!logId) return
+
+    try {
+      const data = await fetchChartData(logId)
       if (Array.isArray(data?.series) && data.series.length === 0) {
         setSeriesData([])
         setTopicCharts([])
@@ -399,9 +369,8 @@ function App() {
         setControlQualityReport(null)
         setControlQualityError('')
         setChartHint(
-          `\u5df2\u8c03\u7528\u56fe\u8868\u63a5\u53e3\uff08logId: ${selectedLogId}\uff09\uff1a\u5f53\u524d\u8fd4\u56de\u7a7a\u6570\u636e\uff08\u5360\u4f4d\uff09`,
+          `\u5df2\u8c03\u7528\u56fe\u8868\u63a5\u53e3\uff08logId: ${logId}\uff09\uff1a\u5f53\u524d\u8fd4\u56de\u7a7a\u6570\u636e\uff08\u5360\u4f4d\uff09`,
         )
-        setTuningSegment(DEFAULT_TUNING_SEGMENT)
         setSelectionBox(null)
         return
       }
@@ -420,7 +389,7 @@ function App() {
       setModeSegments(normalizedModeSegments)
       setDiagnostics(normalizedDiagnostics)
       setActiveLogMeta({
-        logId: typeof data?.logId === 'string' ? data.logId : selectedLogId,
+        logId: typeof data?.logId === 'string' ? data.logId : logId,
         fileName:
           typeof data?.fileName === 'string'
             ? data.fileName
@@ -433,9 +402,8 @@ function App() {
       setChartHint(
         data?.dataSource === 'header-derived-simulated-series'
           ? '\u5df2\u52a0\u8f7d\u56fe\u8868\u6570\u636e\uff08\u5f53\u524d\u4e3a\u57fa\u4e8e ULog \u5934\u90e8\u7279\u5f81\u7684\u6f14\u793a\u65f6\u5e8f\uff09'
-          : '\u5df2\u52a0\u8f7d\u56fe\u8868\u6570\u636e\uff08\u6765\u81ea PX4 \u4e3b\u9898\u89e3\u6790\uff09'
+          : '\u5df2\u52a0\u8f7d\u56fe\u8868\u6570\u636e\uff08\u6765\u81ea PX4 \u4e3b\u9898\u89e3\u6790\uff09',
       )
-      await loadControlQuality(selectedLogId)
     } catch {
       setSeriesData([])
       setTopicCharts([])
@@ -443,7 +411,6 @@ function App() {
       setControlQualityReport(null)
       setControlQualityError('')
       setActiveLogMeta(null)
-      setTuningSegment(DEFAULT_TUNING_SEGMENT)
       setSelectionBox(null)
       void loadLogList({ preferLogId: '' })
       setChartHint(
@@ -452,7 +419,8 @@ function App() {
     }
   }
 
-  const handleLogSelect = (logId: string) => {
+  const handleLogSelect = async (logId: string) => {
+    cleanupChartInteractions()
     setSelectedLogId(logId)
     setSeriesData([])
     setTopicCharts([])
@@ -461,10 +429,9 @@ function App() {
     setControlQualityReport(null)
     setControlQualityError('')
     setActiveLogMeta(null)
-    setTuningSegment(DEFAULT_TUNING_SEGMENT)
     setSelectionBox(null)
     if (logId) {
-      setChartHint('\u5df2\u5207\u6362\u65e5\u5fd7\uff0c\u8bf7\u70b9\u51fb\u6253\u5f00\u56fe\u8868\u6a21\u5757\u3002')
+      await loadChartForLog(logId)
     } else {
       setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
     }
@@ -474,24 +441,18 @@ function App() {
     startS: number | null,
     endS: number | null,
   ) => {
-    if (!selectedLogId) return
-    const segment = {
+    if (!controlAnalysisLogId) return
+    await loadControlQuality(controlAnalysisLogId, {
       startS,
       endS,
       source: startS !== null && endS !== null ? 'manual' : 'auto',
-    }
-    setTuningSegment({
-      startS,
-      endS,
-      source: segment.source === 'manual' ? 'manual' : 'default',
     })
-    await loadControlQuality(selectedLogId, segment)
   }
 
   const handleExportControlQualityCsv = async () => {
-    if (!selectedLogId || !controlQualityReport) return
+    if (!controlAnalysisLogId || !controlQualityReport) return
     const csv = await exportControlQualityCsv({
-      logId: selectedLogId,
+      logId: controlAnalysisLogId,
       segment: {
         startS: controlQualityReport.analysis_time_range.start_s,
         endS: controlQualityReport.analysis_time_range.end_s,
@@ -516,7 +477,7 @@ function App() {
     setControlQualityReport(null)
     setControlQualityError('')
     setActiveLogMeta(null)
-    setChartHint('\u65e5\u5fd7\u5217\u8868\u5df2\u66f4\u65b0\uff0c\u8bf7\u9009\u62e9\u65e5\u5fd7\u540e\u6253\u5f00\u56fe\u8868\u3002')
+    setChartHint('\u65e5\u5fd7\u5217\u8868\u5df2\u66f4\u65b0\uff0c\u8bf7\u9009\u62e9\u65e5\u5fd7\u540e\u67e5\u770b\u56fe\u8868\u3002')
   }
 
   const handlePrevPage = async () => {
@@ -696,20 +657,6 @@ function App() {
         const start = (minX / rect.width) * 100
         const end = (maxX / rect.width) * 100
         applyDataZoom(start, end)
-
-        const selectedStartTime = percentToTimeValue(start, timeRange)
-        const selectedEndTime = percentToTimeValue(end, timeRange)
-        if (
-          Number.isFinite(selectedStartTime) &&
-          Number.isFinite(selectedEndTime) &&
-          selectedEndTime > selectedStartTime
-        ) {
-          setTuningSegment({
-            startS: Number(selectedStartTime.toFixed(3)),
-            endS: Number(selectedEndTime.toFixed(3)),
-            source: 'chart_selection',
-          })
-        }
       }
     }
 
@@ -861,41 +808,94 @@ function App() {
   return (
     <div className="app">
       <header className="header">
-        <h1>{'\u98de\u884c\u65e5\u5fd7\u5e73\u53f0\uff08\u6846\u67b6\u7248\uff09'}</h1>
-        <p>{'\u9879\u76ee\u7ed3\u6784\u5df2\u5c31\u7eea\uff0c\u5177\u4f53\u529f\u80fd\u5c06\u5728\u4e0b\u4e00\u6b65\u5b9e\u73b0\u3002'}</p>
+        <h1>{'\u98de\u884c\u65e5\u5fd7\u5206\u6790\u5e73\u53f0'}</h1>
+        <p>
+          {'\u9009\u62e9\u529f\u80fd\u540e\u8fdb\u5165\u5bf9\u5e94\u6a21\u5757\uff1a\u5355\u65e5\u5fd7\u4e0a\u4f20\u5206\u6790\u3001\u6279\u91cf\u7b5b\u9009\u65e5\u5fd7\u3001\u63a7\u5236\u73af\u8def\u5206\u6790\u3002'}
+        </p>
       </header>
 
       <main className="page">
-        {viewMode === 'upload' ? (
+        {viewMode === 'home' ? (
+          <section className="feature-hub">
+            <h2>{'\u529f\u80fd\u9009\u62e9'}</h2>
+            <div className="feature-grid">
+              <button
+                type="button"
+                className="feature-card"
+                onClick={handleEnterLogAnalysis}
+              >
+                <h3>{'\u529f\u80fd 1\uff1a\u65e5\u5fd7\u4e0a\u4f20\u5206\u6790'}</h3>
+                <p>
+                  {'\u4e0a\u4f20\u5355\u4efd .ulg \u65e5\u5fd7\uff0c\u67e5\u770b\u56fe\u8868\u4e0e\u8bca\u65ad\u4fe1\u606f\u3002'}
+                </p>
+              </button>
+              <button
+                type="button"
+                className="feature-card"
+                onClick={handleEnterBatchAnalysis}
+              >
+                <h3>{'\u529f\u80fd 2\uff1a\u6279\u91cf\u4e0a\u4f20\u7b5b\u9009\u65e5\u5fd7'}</h3>
+                <p>
+                  {'\u6279\u91cf\u4e0a\u4f20\u591a\u4efd\u65e5\u5fd7\uff0c\u7b5b\u9009\u89e3\u9501\u98de\u884c\u5e76\u6309\u65f6\u95f4\u6392\u5e8f\u3002'}
+                </p>
+              </button>
+              <button
+                type="button"
+                className="feature-card"
+                onClick={handleEnterControlAnalysis}
+              >
+                <h3>{'\u529f\u80fd 3\uff1a\u63a7\u5236\u73af\u8def\u5206\u6790'}</h3>
+                <p>
+                  {'\u6309\u6267\u884c\u5668\u3001\u89d2\u901f\u5ea6\u3001\u59ff\u6001\u3001\u901f\u5ea6\u3001\u4f4d\u7f6e\u73af\u987a\u5e8f\u5206\u6790\u63a7\u5236\u8ddf\u968f\u8d28\u91cf\u3002'}
+                </p>
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {viewMode === 'log-analysis' && logAnalysisStep === 'upload' ? (
           <>
-            {SHOW_SINGLE_LOG_UPLOAD && (
-              <UploadPanel
-                selectedFileName={selectedFileName}
-                isUploading={isUploading}
-                statusText={statusText}
-                onFileSelected={handleFileSelected}
-                onUpload={handleUpload}
-              />
-            )}
-            <BatchLogUpload />
-          </>
-        ) : (
-          <section className={`card ${selectedLogId ? '' : 'card-disabled'}`}>
             <div className="page-title-row">
-              <h2>{'\u529f\u80fd 2\uff1a\u56fe\u8868\u5c55\u793a'}</h2>
+              <span />
               <button
                 type="button"
                 className="button"
-                onClick={handleBackToUpload}
+                onClick={handleBackToHome}
               >
-                {'\u8fd4\u56de\u4e0a\u4f20\u65e5\u5fd7'}
+                {'\u8fd4\u56de\u529f\u80fd\u5217\u8868'}
               </button>
             </div>
-            <ul>
-              <li>{'\u65e5\u5fd7\u7b5b\u9009\u6761\u4ef6\u533a\u57df'}</li>
-              <li>{'\u56fe\u8868\u5c55\u793a\u533a\u57df\uff08\u6298\u7ebf/\u67f1\u72b6\uff09'}</li>
-              <li>{'\u56fe\u8868\u6570\u636e\u63a5\u53e3\u5360\u4f4d'}</li>
-            </ul>
+            <UploadPanel
+              selectedFileName={selectedFileName}
+              isUploading={isUploading}
+              statusText={statusText}
+              onFileSelected={handleFileSelected}
+              onUpload={handleUpload}
+            />
+          </>
+        ) : null}
+
+        {viewMode === 'log-analysis' && logAnalysisStep === 'chart' ? (
+          <section className={`card ${selectedLogId ? '' : 'card-disabled'}`}>
+            <div className="page-title-row">
+              <h2>{'\u529f\u80fd 1\uff1a\u65e5\u5fd7\u4e0a\u4f20\u5206\u6790'}</h2>
+              <div className="actions">
+                <button
+                  type="button"
+                  className="button"
+                  onClick={handleBackToLogUpload}
+                >
+                  {'\u8fd4\u56de\u4e0a\u4f20\u65e5\u5fd7'}
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={handleBackToHome}
+                >
+                  {'\u8fd4\u56de\u529f\u80fd\u5217\u8868'}
+                </button>
+              </div>
+            </div>
             <LogSelector
               selectedLogId={selectedLogId}
               searchKeyword={searchKeyword}
@@ -909,16 +909,90 @@ function App() {
               onRefreshLogList={() => loadLogList({ preferLogId: selectedLogId })}
               onPrevPage={handlePrevPage}
               onNextPage={handleNextPage}
-              onLoadChart={handleLoadChart}
             />
-            <TuningPanel
-              selectedLogId={selectedLogId || undefined}
-              axis={selectedTuningAxis}
-              onAxisChange={setSelectedTuningAxis}
-              tuningSegment={tuningSegment}
-              segmentQuality={segmentQuality}
-              onTuningSegmentChange={setTuningSegment}
+            <ChartPanel
+              activeLogMeta={activeLogMeta}
+              topicCharts={topicCharts}
+              seriesData={seriesData}
+              modeSegments={modeSegments}
+              diagnostics={diagnostics}
+              selectionBox={selectionBox}
+              chartHint={chartHint}
+              showDefaultSeriesFallback
+              onChartReady={bindChartInteractions}
+              onChartDispose={handleChartDispose}
             />
+          </section>
+        ) : null}
+
+        {viewMode === 'batch' ? (
+          <>
+            <div className="page-title-row">
+              <span />
+              <button
+                type="button"
+                className="button"
+                onClick={handleBackToHome}
+              >
+                {'\u8fd4\u56de\u529f\u80fd\u5217\u8868'}
+              </button>
+            </div>
+            <BatchLogUpload />
+          </>
+        ) : null}
+
+        {viewMode === 'control-analysis' ? (
+          <section className="card">
+            <div className="page-title-row">
+              <div>
+                <h2>{'\u529f\u80fd 3\uff1a\u63a7\u5236\u73af\u8def\u5206\u6790'}</h2>
+                <p className="hint">
+                  {'\u6309\u6587\u6863\u8981\u6c42\u4ece\u5185\u73af\u5230\u5916\u73af\u4f9d\u6b21\u5c55\u793a\u5f53\u524d\u65e5\u5fd7\u7684\u63a7\u5236\u8ddf\u968f\u66f2\u7ebf\u4e0e\u6307\u6807\u3002'}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="button"
+                onClick={handleBackToHome}
+              >
+                {'\u8fd4\u56de\u529f\u80fd\u5217\u8868'}
+              </button>
+            </div>
+            <input
+              ref={controlAnalysisFileInputRef}
+              type="file"
+              className="hidden-input"
+              accept=".ulg"
+              onChange={handleControlAnalysisFileChange}
+            />
+            <div className="actions">
+              <button
+                type="button"
+                className="button"
+                onClick={handleChooseControlAnalysisFile}
+              >
+                {'\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6'}
+              </button>
+              <button
+                type="button"
+                className="button"
+                onClick={handleUploadControlAnalysisLog}
+                disabled={isControlAnalysisUploading}
+              >
+                {isControlAnalysisUploading
+                  ? '\u4e0a\u4f20\u4e2d...'
+                  : '\u4e0a\u4f20\u65e5\u5fd7\u6587\u4ef6'}
+              </button>
+            </div>
+            {controlAnalysisFileName ? (
+              <p className="hint">
+                {'\u5df2\u9009\u6587\u4ef6\uff1a'}
+                {controlAnalysisFileName}
+              </p>
+            ) : null}
+            {controlAnalysisStatusText ? (
+              <p className="hint">{controlAnalysisStatusText}</p>
+            ) : null}
             <ControlQualityPanel
               report={controlQualityReport}
               isLoading={isControlQualityLoading}
@@ -926,50 +1000,8 @@ function App() {
               onApplyRange={handleApplyControlQualityRange}
               onExportCsv={handleExportControlQualityCsv}
             />
-            <div className="chart-view-toolbar">
-              <div className="chart-view-row">
-                <label className="tuning-field" htmlFor="chart-view-mode">
-                  <span className="tuning-subtitle">
-                    {'\u56fe\u8868\u663e\u793a\u6a21\u5f0f\uff1a'}
-                  </span>
-                  <select
-                    id="chart-view-mode"
-                    className="select"
-                    value={chartViewMode}
-                    onChange={(event) =>
-                      setChartViewMode(event.target.value as ChartViewMode)
-                    }
-                  >
-                    <option value="pid">
-                      {'PID \u89c6\u56fe'}
-                    </option>
-                    <option value="normal">{'\u5e38\u89c4\u89c6\u56fe'}</option>
-                  </select>
-                </label>
-              </div>
-              <p className="hint">{chartViewDescription}</p>
-            </div>
-            <ChartPanel
-              activeLogMeta={activeLogMeta}
-              topicCharts={visibleTopicCharts}
-              seriesData={visibleSeriesData}
-              modeSegments={modeSegments}
-              diagnostics={visibleDiagnostics}
-              selectionBox={selectionBox}
-              activeChartTopic={activePidChartTopic}
-              activeChartBadgeLabel={
-                chartViewMode === 'pid'
-                  ? '\u5f53\u524d\u8c03\u53c2\u8f74'
-                  : undefined
-              }
-              chartHint={chartHint}
-              emptyStateMessage={chartEmptyStateMessage}
-              showDefaultSeriesFallback={chartViewMode === 'normal'}
-              onChartReady={bindChartInteractions}
-              onChartDispose={handleChartDispose}
-            />
           </section>
-        )}
+        ) : null}
       </main>
     </div>
   )

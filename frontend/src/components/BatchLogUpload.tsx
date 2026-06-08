@@ -114,7 +114,7 @@ function BatchLogUpload() {
 
   return (
     <section className="card">
-      <h2>{'\u6279\u91cf\u7b5b\u9009\u89e3\u9501\u98de\u884c\u65e5\u5fd7'}</h2>
+      <h2>{'\u529f\u80fd 2\uff1a\u6279\u91cf\u4e0a\u4f20\u7b5b\u9009\u65e5\u5fd7'}</h2>
       <input
         ref={fileInputRef}
         type="file"
