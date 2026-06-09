@@ -129,7 +129,7 @@ test('buildControlQualityReport produces position metrics for available fields',
 
   assert.equal(report.loops.position.status, 'available');
   assert.equal(report.loops.position.axis.x.metrics.max_error, 1);
-  assert.equal(report.loops.position.axis.xy.status, 'available');
+  assert.deepEqual(Object.keys(report.loops.position.axis), ['x', 'y', 'z']);
 });
 
 test('buildControlQualityReport accepts suffixed PX4 topics and local position setpoints', () => {
@@ -210,11 +210,66 @@ test('buildControlQualityReport accepts suffixed PX4 topics and local position s
   });
 
   assert.equal(report.loops.actuator.status, 'available');
+  assert.deepEqual(report.loops.actuator.chart, [
+    {
+      name: 'control_00',
+      points: actuatorPoints,
+    },
+  ]);
   assert.equal(report.loops.rate.status, 'available');
   assert.equal(report.loops.velocity.status, 'available');
   assert.equal(report.loops.position.status, 'available');
   assert.equal(report.loops.rate.axis.roll.status, 'available');
   assert.equal(report.loops.velocity.axis.vx.status, 'available');
   assert.equal(report.loops.position.axis.x.status, 'available');
-  assert.equal(report.loops.position.axis.xy.status, 'available');
+  assert.deepEqual(Object.keys(report.loops.position.axis), ['x', 'y', 'z']);
+});
+
+test('control quality charts keep full curves while metrics use the selected segment', () => {
+  const points = [
+    [0, 0],
+    [1, 1],
+    [2, 2],
+    [3, 3],
+    [4, 4],
+    [5, 5],
+  ];
+  const shifted = points.map(([time, value]) => [time, value + 1]);
+  const actuatorPoints = points.map(([time]) => [time, 0.5]);
+  const report = buildControlQualityReport({
+    fileName: 'segment.ulg',
+    usedTopics: [
+      'actuator_motors',
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    topicCharts: [
+      {
+        topic: 'actuator_motors',
+        title: 'actuator_motors',
+        series: [buildSeries('control_00', actuatorPoints)],
+      },
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', shifted)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', points)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 1,
+      endS: 5,
+      source: 'manual',
+    },
+  });
+
+  assert.equal(report.loops.rate.axis.roll.metrics.sample_count, 5);
+  assert.equal(report.loops.rate.charts[0].setpointFeedback.length, 6);
+  assert.deepEqual(report.loops.actuator.chart[0].points, actuatorPoints);
+  assert.equal(report.loops.actuator.channels[0].sample_count, 5);
 });

@@ -295,11 +295,36 @@ type ControlQualityReport = {
 };
 ```
 
+For the `actuator` loop, `ControlQualityLoop` also returns `chart`, a list of
+executor output channels for the full available curve. Metric fields and
+`channels` are calculated from the selected `analysis_time_range`; the chart
+points are intentionally not clipped so the frontend can keep the user's zoom
+context and highlight the active analysis interval.
+
+```ts
+type ControlQualityLoop = {
+  status: string;
+  metrics?: Record<string, number | string | null>;
+  channels?: Array<Record<string, number | string | null>>;
+  chart?: Array<{
+    name: string;
+    points: [number, number][];
+  }>;
+};
+```
+
+For trackable loops (`rate`, `attitude`, `velocity`, `position`), `charts`
+follows the same rule: `setpointFeedback` and `error` contain full aligned
+curves, while `axis.*.metrics` is computed from `analysis_time_range`.
+
 Loop order is always inner-to-outer:
 
 ```text
 actuator -> rate -> attitude -> velocity -> position -> estimator_quality -> hints
 ```
+
+The `position` loop exposes real trackable axes only: `x`, `y`, and `z`.
+It does not include a synthetic horizontal `xy` axis.
 
 Each available axis exposes at least:
 
@@ -326,3 +351,39 @@ log_file,time_start_s,time_end_s,loop,axis,unit,mae,rmse,nrmse,...
 
 The CSV is intended for manual review. It is not a ranking table and does not
 contain baseline thresholds.
+
+### Multi-log Control Comparison
+
+`POST /api/logs/control-quality/batch` accepts multiple files in one multipart
+request:
+
+```text
+Content-Type: multipart/form-data
+logFiles: File[]
+```
+
+The response contains one report item per successfully parsed `.ulg` and one
+failure item per rejected file:
+
+```ts
+type BatchControlQualityResponse = {
+  reports: Array<{
+    logId: string;
+    fileName: string;
+    uploadedAt: string;
+    metadata: LogMetadata;
+    report: ControlQualityReport;
+  }>;
+  failedLogs: Array<{
+    fileName: string;
+    reason: string;
+  }>;
+  total: number;
+  successCount: number;
+  failedCount: number;
+};
+```
+
+Each comparison column renders one `ControlQualityReport`. Recalculating an
+analysis range or exporting CSV is scoped to that column's `logId` through the
+single-log `/api/logs/control-quality` endpoint.

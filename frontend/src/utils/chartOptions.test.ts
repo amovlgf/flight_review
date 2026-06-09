@@ -46,7 +46,7 @@ describe('chartOptions', () => {
     expect(option.legend.data).toEqual(['高度 (m)', '速度 (m/s)'])
     expect(option.xAxis.type).toBe('value')
     expect(option.yAxis.type).toBe('value')
-    expect(option.dataZoom).toHaveLength(2)
+    expect(option.dataZoom).toHaveLength(1)
     expect(option.series).toHaveLength(2)
     expect(option.series[0]).toMatchObject({
       name: '高度 (m)',

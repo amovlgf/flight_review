@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import ReactECharts from 'echarts-for-react'
+import ChartTimelineScrubber from './ChartTimelineScrubber'
 import DiagnosticsPanel from './DiagnosticsPanel'
 import type { DiagnosticItem } from './DiagnosticsPanel'
 import {
@@ -50,6 +51,8 @@ type ChartPanelProps = {
   modeSegments: ModeSegment[]
   diagnostics: DiagnosticItem[]
   selectionBox?: ChartSelectionPreview | null
+  timelinePointer?: number | null
+  isTimelinePlaying?: boolean
   activeChartTopic?: string
   activeChartBadgeLabel?: string
   chartHint: string
@@ -61,6 +64,8 @@ type ChartPanelProps = {
     timeRange: ChartTimeRange,
   ) => void
   onChartDispose?: (chartKey: string) => void
+  onTimelineSeek?: (timeValue: number) => void
+  onToggleTimelinePlayback?: () => void
 }
 
 type SelectedSeriesMap = Record<string, string[]>
@@ -73,6 +78,8 @@ type ChartCardProps = {
   modeSegments: ModeSegment[]
   selectedKeys?: string[]
   selectionBox?: NormalizedSelectionBox | null
+  timelinePointer?: number | null
+  isTimelinePlaying?: boolean
   isActive?: boolean
   activeBadgeLabel?: string
   onChartReady: (
@@ -81,6 +88,8 @@ type ChartCardProps = {
     timeRange: ChartTimeRange,
   ) => void
   onChartDispose?: (chartKey: string) => void
+  onTimelineSeek?: (timeValue: number) => void
+  onToggleTimelinePlayback?: () => void
   onToggleSeries: (
     chartId: string,
     series: ChartSeries[],
@@ -129,10 +138,14 @@ const ChartCard = memo(function ChartCard({
   modeSegments,
   selectedKeys,
   selectionBox,
+  timelinePointer,
+  isTimelinePlaying = false,
   isActive = false,
   activeBadgeLabel,
   onChartReady,
   onChartDispose,
+  onTimelineSeek,
+  onToggleTimelinePlayback,
   onToggleSeries,
 }: ChartCardProps) {
   const allKeys = useMemo(() => series.map(getSeriesKey), [series])
@@ -241,6 +254,13 @@ const ChartCard = memo(function ChartCard({
               }}
             />
           ) : null}
+          <ChartTimelineScrubber
+            timeRange={timeRange}
+            timelinePointer={timelinePointer ?? null}
+            isTimelinePlaying={isTimelinePlaying}
+            onTimelineSeek={onTimelineSeek}
+            onTogglePlayback={onToggleTimelinePlayback}
+          />
         </div>
       )}
     </div>
@@ -254,6 +274,8 @@ function ChartPanel({
   modeSegments,
   diagnostics,
   selectionBox,
+  timelinePointer,
+  isTimelinePlaying = false,
   activeChartTopic,
   activeChartBadgeLabel,
   chartHint,
@@ -261,6 +283,8 @@ function ChartPanel({
   showDefaultSeriesFallback = true,
   onChartReady,
   onChartDispose,
+  onTimelineSeek,
+  onToggleTimelinePlayback,
 }: ChartPanelProps) {
   const [selectedSeriesMap, setSelectedSeriesMap] = useState<SelectedSeriesMap>(
     {},
@@ -337,10 +361,14 @@ function ChartPanel({
               selectionBox={
                 selectionBox?.chartId === item.chartId ? selectionBox : null
               }
+              timelinePointer={timelinePointer ?? null}
+              isTimelinePlaying={isTimelinePlaying}
               isActive={item.isActive}
               activeBadgeLabel={activeChartBadgeLabel}
               onChartReady={onChartReady}
               onChartDispose={onChartDispose}
+              onTimelineSeek={onTimelineSeek}
+              onToggleTimelinePlayback={onToggleTimelinePlayback}
               onToggleSeries={handleSeriesToggle}
             />
           ))}
@@ -357,8 +385,12 @@ function ChartPanel({
           selectionBox={
             selectionBox?.chartId === 'default' ? selectionBox : null
           }
+          timelinePointer={timelinePointer ?? null}
+          isTimelinePlaying={isTimelinePlaying}
           onChartReady={onChartReady}
           onChartDispose={onChartDispose}
+          onTimelineSeek={onTimelineSeek}
+          onToggleTimelinePlayback={onToggleTimelinePlayback}
           onToggleSeries={handleSeriesToggle}
         />
       ) : (

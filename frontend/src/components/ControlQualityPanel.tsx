@@ -1,18 +1,37 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import ReactECharts from 'echarts-for-react'
+import ChartTimelineScrubber from './ChartTimelineScrubber'
 import type {
   ControlQualityAxis,
   ControlQualityLoop,
   ControlQualityReport,
 } from '../types/log'
+import type { ChartSelectionPreview, ChartTimeRange } from './ChartPanel'
 
 type ControlQualityPanelProps = {
+  chartKeyPrefix: string
+  rangeGroupKey?: string
+  selectionBox?: ChartSelectionPreview | null
+  timelinePointer?: number | null
+  isTimelinePlaying?: boolean
+  linkedRange?: {
+    startS: number
+    endS: number
+  }
   report: ControlQualityReport | null
   isLoading: boolean
   errorText: string
+  onChartReady?: (
+    chartKey: string,
+    instance: unknown,
+    timeRange: ChartTimeRange,
+    rangeGroupKey?: string,
+  ) => void
+  onChartDispose?: (chartKey: string) => void
+  onTimelineSeek?: (timeValue: number) => void
+  onToggleTimelinePlayback?: () => void
   onApplyRange: (startS: number | null, endS: number | null) => void
-  onExportCsv: () => void
 }
 
 const LOOP_LABELS: Record<string, string> = {
@@ -41,7 +60,6 @@ const AXIS_LABELS: Record<string, string> = {
   x: '北向位置 x',
   y: '东向位置 y',
   z: '地向位置 z',
-  xy: '水平位置 xy',
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -78,7 +96,225 @@ const HINT_LABELS: Record<string, string> = {
 }
 
 const LOOP_ORDER = ['actuator', 'rate', 'attitude', 'velocity', 'position'] as const
+type LoopName = (typeof LOOP_ORDER)[number]
+type LoopHealthState = 'normal' | 'warning' | 'danger' | 'unavailable'
 type MetricRow = [string, string, unknown]
+
+const FLOW_NODE_LABELS: Record<LoopName, string> = {
+  actuator: '执行器',
+  rate: '角度环',
+  attitude: '姿态环',
+  velocity: '速度环',
+  position: '位置环',
+}
+
+const FLOW_HEALTH_LABELS: Record<LoopHealthState, string> = {
+  normal: '正常',
+  warning: '警告',
+  danger: '异常',
+  unavailable: '不可用',
+}
+
+const FLOW_HEALTH_DOTS: Record<LoopHealthState, string> = {
+  normal: '🟢',
+  warning: '🟡',
+  danger: '🔴',
+  unavailable: '⚪',
+}
+
+const TRACKING_ERROR_HINT =
+  'Position tracking error is more prominent than velocity tracking. Review position setpoint smoothness and local position jumps.'
+
+const ACTUATOR_SATURATION_HINT =
+  'Actuator output reaches the reference saturation band in this log. Treat inner-loop conclusions with reduced confidence.'
+
+type RegisteredChartProps = {
+  chartKey: string
+  rangeGroupKey?: string
+  selectionBox?: ChartSelectionPreview | null
+  timelinePointer?: number | null
+  isTimelinePlaying?: boolean
+  option: Record<string, unknown>
+  style: { height: number }
+  timeRange: ChartTimeRange
+  onChartReady?: (
+    chartKey: string,
+    instance: unknown,
+    timeRange: ChartTimeRange,
+    rangeGroupKey?: string,
+  ) => void
+  onChartDispose?: (chartKey: string) => void
+  onTimelineSeek?: (timeValue: number) => void
+  onToggleTimelinePlayback?: () => void
+}
+
+type AnalysisRange = {
+  startS: number | null
+  endS: number | null
+}
+
+function getPointTimeRange(points: Array<[number, ...number[]]>): ChartTimeRange {
+  let start = Infinity
+  let end = -Infinity
+
+  for (const point of points) {
+    const time = point[0]
+    if (typeof time !== 'number' || !Number.isFinite(time)) {
+      continue
+    }
+    start = Math.min(start, time)
+    end = Math.max(end, time)
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return { start: 0, end: 0 }
+  }
+
+  return { start, end }
+}
+
+function getSeriesTimeRange(
+  series: Array<{ points: Array<[number, number]> }>,
+): ChartTimeRange {
+  let start = Infinity
+  let end = -Infinity
+
+  for (const item of series) {
+    const range = getPointTimeRange(item.points)
+    if (range.end < range.start) {
+      continue
+    }
+    start = Math.min(start, range.start)
+    end = Math.max(end, range.end)
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return { start: 0, end: 0 }
+  }
+
+  return { start, end }
+}
+
+const SHARED_TOOLTIP_OPTION = {
+  trigger: 'axis',
+  axisPointer: {
+    type: 'line',
+  },
+}
+
+const SHARED_DATA_ZOOM_OPTION = [
+  {
+    type: 'inside',
+    xAxisIndex: 0,
+    filterMode: 'none',
+    moveOnMouseMove: false,
+  },
+]
+
+function clampPercent(value: number) {
+  return Math.min(Math.max(value, 0), 100)
+}
+
+function timeValueToPercent(value: number, timeRange: ChartTimeRange) {
+  const span = timeRange.end - timeRange.start
+  if (span <= 0) return 0
+  return clampPercent(((value - timeRange.start) / span) * 100)
+}
+
+function getValidAnalysisRange(range?: AnalysisRange | null) {
+  const startS = range?.startS
+  const endS = range?.endS
+  if (
+    typeof startS !== 'number' ||
+    typeof endS !== 'number' ||
+    !Number.isFinite(startS) ||
+    !Number.isFinite(endS) ||
+    endS <= startS
+  ) {
+    return null
+  }
+
+  return { startS, endS }
+}
+
+function buildDataZoomOption(
+  timeRange: ChartTimeRange,
+  visibleRange?: AnalysisRange | null,
+) {
+  const validRange = getValidAnalysisRange(visibleRange)
+  if (!validRange) {
+    return SHARED_DATA_ZOOM_OPTION
+  }
+
+  const start = timeValueToPercent(validRange.startS, timeRange)
+  const end = timeValueToPercent(validRange.endS, timeRange)
+  return SHARED_DATA_ZOOM_OPTION.map((option) => ({
+    ...option,
+    start: Math.min(start, end),
+    end: Math.max(start, end),
+  }))
+}
+
+function RegisteredControlChart({
+  chartKey,
+  rangeGroupKey,
+  selectionBox,
+  timelinePointer,
+  isTimelinePlaying = false,
+  option,
+  style,
+  timeRange,
+  onChartReady,
+  onChartDispose,
+  onTimelineSeek,
+  onToggleTimelinePlayback,
+}: RegisteredChartProps) {
+  const handleChartReady = useCallback(
+    (instance: unknown) => {
+      onChartReady?.(chartKey, instance, timeRange, rangeGroupKey)
+    },
+    [chartKey, onChartReady, rangeGroupKey, timeRange],
+  )
+
+  useEffect(() => {
+    return () => {
+      onChartDispose?.(chartKey)
+    }
+  }, [chartKey, onChartDispose])
+
+  const activeSelectionBox =
+    selectionBox?.chartId === chartKey ? selectionBox : null
+
+  return (
+    <div className="chart-canvas-shell">
+      <ReactECharts
+        key={chartKey}
+        option={option}
+        lazyUpdate
+        style={style}
+        onChartReady={handleChartReady}
+      />
+      {activeSelectionBox ? (
+        <div
+          className="chart-selection-box"
+          style={{
+            left: activeSelectionBox.left,
+            top: activeSelectionBox.top,
+            width: activeSelectionBox.width,
+            height: activeSelectionBox.height,
+          }}
+        />
+      ) : null}
+      <ChartTimelineScrubber
+        timeRange={timeRange}
+        timelinePointer={timelinePointer ?? null}
+        isTimelinePlaying={isTimelinePlaying}
+        onTimelineSeek={onTimelineSeek}
+        onTogglePlayback={onToggleTimelinePlayback}
+      />
+    </div>
+  )
+}
 
 function formatStatus(value: string | null | undefined) {
   if (!value) return '-'
@@ -113,64 +349,106 @@ function formatMetric(value: unknown) {
   return '-'
 }
 
-function downloadText(fileName: string, content: string, mimeType: string) {
-  const blob = new Blob([content], { type: mimeType })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = fileName
-  anchor.click()
-  URL.revokeObjectURL(url)
+function formatRangeInputValue(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return ''
+  }
+  return Number(value.toFixed(3)).toString()
 }
 
-function buildReportHtml(report: ControlQualityReport) {
-  const hints = report.summary.main_hints
-    .map((hint) => `<li>${formatHint(hint)}</li>`)
-    .join('')
-  const missingTopics = report.missing_topics
-    .map((topic) => `<li>${topic}</li>`)
-    .join('')
-
-  return `<!doctype html>
-<html lang="zh-CN">
-<meta charset="utf-8">
-<title>控制效果分析报告 - ${report.log_file}</title>
-<style>
-body{font-family:Arial,sans-serif;line-height:1.5;margin:32px;color:#1f2937}
-table{border-collapse:collapse;width:100%;margin:12px 0}
-td,th{border:1px solid #d8dee9;padding:8px;text-align:left}
-th{background:#f8fafc}
-</style>
-<h1>控制效果分析报告</h1>
-<p><strong>日志文件：</strong> ${report.log_file}</p>
-<p><strong>分析区间：</strong> ${formatMetric(report.analysis_time_range.start_s)}s - ${formatMetric(report.analysis_time_range.end_s)}s</p>
-<h2>总览</h2>
-<p>可分析环路：${formatLoopList(report.summary.available_loops)}</p>
-<p>不可用环路：${formatLoopList(report.summary.unavailable_loops)}</p>
-<ul>${hints}</ul>
-<h2>缺失 topic</h2>
-<ul>${missingTopics || '<li>-</li>'}</ul>
-</html>`
+function getLoopAnchorId(chartKeyPrefix: string, loopName: string) {
+  return `${chartKeyPrefix}__${loopName}__control-quality-anchor`
 }
 
-function buildSetpointFeedbackOption(
+function getMetricNumber(metrics: ControlQualityLoop['metrics'], key: string) {
+  const value = metrics?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function getMaxAxisMetric(loop: ControlQualityLoop | undefined, key: string) {
+  const values = Object.values(loop?.axis || {})
+    .map((axis) => getMetricNumber(axis.metrics, key))
+    .filter((value): value is number => value !== null)
+
+  return values.length > 0 ? Math.max(...values) : null
+}
+
+function getLoopHealth(
+  loopName: LoopName,
+  loop: ControlQualityLoop | undefined,
+  hints: string[],
+): { state: LoopHealthState; detail: string } {
+  if (!loop || loop.status !== 'available') {
+    return { state: 'unavailable', detail: formatStatus(loop?.status || 'missing') }
+  }
+
+  if (loopName === 'actuator') {
+    const satHighRatio = getMetricNumber(loop.metrics, 'sat_high_ratio') ?? 0
+    const satLowRatio = getMetricNumber(loop.metrics, 'sat_low_ratio') ?? 0
+    if (
+      hints.includes(ACTUATOR_SATURATION_HINT) ||
+      Math.max(satHighRatio, satLowRatio) >= 0.02
+    ) {
+      return { state: 'danger', detail: '触发饱和' }
+    }
+    return { state: 'normal', detail: '输出余量正常' }
+  }
+
+  const maxNrmse = getMaxAxisMetric(loop, 'nrmse')
+  const maxRmse = getMaxAxisMetric(loop, 'rmse')
+
+  if (loopName === 'position' && hints.includes(TRACKING_ERROR_HINT)) {
+    return { state: 'warning', detail: '跟踪误差明显' }
+  }
+
+  if (maxNrmse !== null) {
+    if (maxNrmse >= 0.35) return { state: 'danger', detail: 'NRMSE 偏高' }
+    if (maxNrmse >= 0.18) return { state: 'warning', detail: '跟踪误差偏高' }
+    return { state: 'normal', detail: `NRMSE ${formatMetric(maxNrmse)}` }
+  }
+
+  if (maxRmse !== null) {
+    return { state: 'normal', detail: `RMSE ${formatMetric(maxRmse)}` }
+  }
+
+  return { state: 'normal', detail: '指标可用' }
+}
+
+function buildTrackingErrorOption(
   title: string,
   unit: string,
   points: Array<[number, number, number]>,
+  errorPoints: Array<[number, number]>,
+  timeRange: ChartTimeRange,
+  visibleRange?: AnalysisRange | null,
 ) {
+  const valueUnit = unit || '数值'
+
   return {
-    backgroundColor: '#f7f9fc',
-    tooltip: { trigger: 'axis' },
-    legend: { top: 8, data: ['期望值', '实际值'] },
-    grid: { left: 58, right: 24, top: 58, bottom: 44 },
+    backgroundColor: '#ffffff',
+    tooltip: SHARED_TOOLTIP_OPTION,
+    legend: { top: 8, data: ['期望值', '实际值', '误差'] },
+    grid: { left: 58, right: 72, top: 58, bottom: 44 },
     xAxis: { type: 'value', name: '时间 (s)' },
-    yAxis: { type: 'value', name: unit || '数值' },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 10 }],
+    yAxis: [
+      { type: 'value', name: valueUnit },
+      {
+        type: 'value',
+        name: `误差 ${valueUnit}`,
+        position: 'right',
+        show: false,
+        axisLine: { show: true, lineStyle: { color: '#dc2626' } },
+        axisLabel: { color: '#b91c1c' },
+        nameTextStyle: { color: '#b91c1c' },
+      },
+    ],
+    dataZoom: buildDataZoomOption(timeRange, visibleRange),
     title: { text: title, left: 8, top: 8, textStyle: { fontSize: 13 } },
     series: [
       {
         name: '期望值',
         type: 'line',
+        yAxisIndex: 0,
         showSymbol: false,
         data: points.map((point) => [point[0], point[1]]),
         lineStyle: { color: '#f97316', width: 2.3 },
@@ -178,30 +456,19 @@ function buildSetpointFeedbackOption(
       {
         name: '实际值',
         type: 'line',
+        yAxisIndex: 0,
         showSymbol: false,
         data: points.map((point) => [point[0], point[2]]),
         lineStyle: { color: '#1d4ed8', width: 2.3 },
       },
-    ],
-  }
-}
-
-function buildErrorOption(title: string, unit: string, points: Array<[number, number]>) {
-  return {
-    backgroundColor: '#f7f9fc',
-    tooltip: { trigger: 'axis' },
-    grid: { left: 58, right: 24, top: 48, bottom: 44 },
-    xAxis: { type: 'value', name: '时间 (s)' },
-    yAxis: { type: 'value', name: unit || '误差' },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 10 }],
-    title: { text: title, left: 8, top: 8, textStyle: { fontSize: 13 } },
-    series: [
       {
         name: '误差',
         type: 'line',
+        yAxisIndex: 0,
         showSymbol: false,
-        data: points,
+        data: errorPoints,
         lineStyle: { color: '#dc2626', width: 2 },
+        areaStyle: { color: 'rgba(220, 38, 38, 0.12)' },
         markLine: {
           silent: true,
           symbol: 'none',
@@ -210,6 +477,35 @@ function buildErrorOption(title: string, unit: string, points: Array<[number, nu
         },
       },
     ],
+  }
+}
+
+function buildActuatorOutputOption(
+  title: string,
+  series: Array<{ name: string; points: Array<[number, number]> }>,
+  timeRange: ChartTimeRange,
+  visibleRange?: AnalysisRange | null,
+) {
+  return {
+    backgroundColor: '#ffffff',
+    tooltip: SHARED_TOOLTIP_OPTION,
+    legend: {
+      type: 'scroll',
+      top: 8,
+      data: series.map((item) => item.name),
+    },
+    grid: { left: 58, right: 24, top: 58, bottom: 44 },
+    xAxis: { type: 'value', name: '时间 (s)' },
+    yAxis: { type: 'value', name: '输出值' },
+    dataZoom: buildDataZoomOption(timeRange, visibleRange),
+    title: { text: title, left: 8, top: 8, textStyle: { fontSize: 13 } },
+    series: series.map((item) => ({
+      name: item.name,
+      type: 'line',
+      showSymbol: false,
+      data: item.points,
+      lineStyle: { width: 1.8 },
+    })),
   }
 }
 
@@ -276,17 +572,95 @@ function MetricsTable({ axis }: { axis: ControlQualityAxis | null }) {
   return <CollapsibleMetricTable rows={rows} />
 }
 
+function ControlFlowNodes({
+  chartKeyPrefix,
+  report,
+  onNodeClick,
+}: {
+  chartKeyPrefix: string
+  report: ControlQualityReport
+  onNodeClick: (loopName: LoopName) => void
+}) {
+  return (
+    <div className="control-flow" aria-label="控制环路串联流程">
+      {LOOP_ORDER.map((loopName, index) => {
+        const health = getLoopHealth(
+          loopName,
+          report.loops[loopName],
+          report.summary.main_hints,
+        )
+
+        return (
+          <div className="control-flow-step" key={loopName}>
+            <button
+              type="button"
+              className={`control-flow-node control-flow-node-${health.state}`}
+              onClick={() => onNodeClick(loopName)}
+              aria-describedby={getLoopAnchorId(chartKeyPrefix, loopName)}
+            >
+              <span className="control-flow-node-title">
+                {FLOW_NODE_LABELS[loopName]}
+              </span>
+              <span className="control-flow-node-status">
+                <span aria-hidden="true">{FLOW_HEALTH_DOTS[health.state]}</span>
+                <span>{FLOW_HEALTH_LABELS[health.state]}</span>
+              </span>
+              <span className="control-flow-node-detail">{health.detail}</span>
+            </button>
+            {index < LOOP_ORDER.length - 1 ? (
+              <span className="control-flow-arrow" aria-hidden="true">
+                →
+              </span>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function ControlLoopCard({
+  chartKeyPrefix,
+  rangeGroupKey,
+  selectionBox,
+  timelinePointer,
+  isTimelinePlaying,
+  visibleRange,
   loopName,
   loop,
+  isHighlighted,
+  onChartReady,
+  onChartDispose,
+  onTimelineSeek,
+  onToggleTimelinePlayback,
 }: {
+  chartKeyPrefix: string
+  rangeGroupKey?: string
+  selectionBox?: ChartSelectionPreview | null
+  timelinePointer?: number | null
+  isTimelinePlaying?: boolean
+  visibleRange?: AnalysisRange | null
   loopName: string
   loop: ControlQualityLoop | undefined
+  isHighlighted: boolean
+  onChartReady?: (
+    chartKey: string,
+    instance: unknown,
+    timeRange: ChartTimeRange,
+    rangeGroupKey?: string,
+  ) => void
+  onChartDispose?: (chartKey: string) => void
+  onTimelineSeek?: (timeValue: number) => void
+  onToggleTimelinePlayback?: () => void
 }) {
   const axisNames = Object.keys(loop?.axis || {})
   const [selectedAxis, setSelectedAxis] = useState(axisNames[0] || '')
   const resolvedAxis = selectedAxis && loop?.axis ? loop.axis[selectedAxis] : null
   const chart = loop?.charts?.find((item) => item.axis === selectedAxis)
+  const trackingChartKey = `${chartKeyPrefix}__${loopName}__${selectedAxis}__tracking`
+  const trackingTimeRange = chart
+    ? getPointTimeRange([...chart.setpointFeedback, ...chart.error])
+    : { start: 0, end: 0 }
 
   return (
     <section className="control-quality-loop">
@@ -314,32 +688,84 @@ function ControlLoopCard({
       ) : null}
       {resolvedAxis ? <MetricsTable axis={resolvedAxis} /> : null}
       {chart ? (
-        <div className="control-quality-charts">
-          <ReactECharts
-            option={buildSetpointFeedbackOption(
-              `${formatAxisName(selectedAxis)} 期望值 / 实际值`,
+        <div
+          id={getLoopAnchorId(chartKeyPrefix, loopName)}
+          className={`control-quality-charts${
+            isHighlighted ? ' control-quality-chart-highlight' : ''
+          }`}
+        >
+          <RegisteredControlChart
+            chartKey={trackingChartKey}
+            rangeGroupKey={rangeGroupKey}
+            selectionBox={selectionBox}
+            timelinePointer={timelinePointer}
+            isTimelinePlaying={isTimelinePlaying}
+            option={buildTrackingErrorOption(
+              `${formatAxisName(selectedAxis)} 期望值 / 实际值 / 误差`,
               chart.unit,
               chart.setpointFeedback,
+              chart.error,
+              trackingTimeRange,
+              visibleRange,
             )}
-            lazyUpdate
-            style={{ height: 260 }}
-          />
-          <ReactECharts
-            option={buildErrorOption(`${formatAxisName(selectedAxis)} 误差`, chart.unit, chart.error)}
-            lazyUpdate
-            style={{ height: 240 }}
+            style={{ height: 300 }}
+            timeRange={trackingTimeRange}
+            onChartReady={onChartReady}
+            onChartDispose={onChartDispose}
+            onTimelineSeek={onTimelineSeek}
+            onToggleTimelinePlayback={onToggleTimelinePlayback}
           />
         </div>
       ) : (
-        <p className="hint">当前分析轴没有可用曲线。</p>
+        <p
+          id={getLoopAnchorId(chartKeyPrefix, loopName)}
+          className={`hint${
+            isHighlighted ? ' control-quality-chart-highlight' : ''
+          }`}
+        >
+          当前分析轴没有可用曲线。
+        </p>
       )}
     </section>
   )
 }
 
-function ActuatorSummary({ loop }: { loop: ControlQualityLoop | undefined }) {
+function ActuatorSummary({
+  chartKeyPrefix,
+  rangeGroupKey,
+  selectionBox,
+  timelinePointer,
+  isTimelinePlaying,
+  visibleRange,
+  loop,
+  isHighlighted,
+  onChartReady,
+  onChartDispose,
+  onTimelineSeek,
+  onToggleTimelinePlayback,
+}: {
+  chartKeyPrefix: string
+  rangeGroupKey?: string
+  selectionBox?: ChartSelectionPreview | null
+  timelinePointer?: number | null
+  isTimelinePlaying?: boolean
+  visibleRange?: AnalysisRange | null
+  loop: ControlQualityLoop | undefined
+  isHighlighted: boolean
+  onChartReady?: (
+    chartKey: string,
+    instance: unknown,
+    timeRange: ChartTimeRange,
+    rangeGroupKey?: string,
+  ) => void
+  onChartDispose?: (chartKey: string) => void
+  onTimelineSeek?: (timeValue: number) => void
+  onToggleTimelinePlayback?: () => void
+}) {
   if (!loop) return null
   const metrics = loop.metrics || {}
+  const outputSeries = (loop.chart || []).filter((series) => series.points.length > 0)
+  const outputTimeRange = getSeriesTimeRange(outputSeries)
   const rows: MetricRow[] = [
     ['分析状态', '执行器输出 topic 是否存在且包含可用输出通道。', loop.status],
     ['上限饱和比例', '输出接近上限的样本比例，越高说明执行器余量越小。', metrics.sat_high_ratio],
@@ -360,25 +786,86 @@ function ActuatorSummary({ loop }: { loop: ControlQualityLoop | undefined }) {
         </span>
       </div>
       <CollapsibleMetricTable rows={rows} />
+      {outputSeries.length > 0 ? (
+        <div
+          id={getLoopAnchorId(chartKeyPrefix, 'actuator')}
+          className={`control-quality-charts${
+            isHighlighted ? ' control-quality-chart-highlight' : ''
+          }`}
+        >
+          <RegisteredControlChart
+            chartKey={`${chartKeyPrefix}__actuator__output`}
+            rangeGroupKey={rangeGroupKey}
+            selectionBox={selectionBox}
+            timelinePointer={timelinePointer}
+            isTimelinePlaying={isTimelinePlaying}
+            option={buildActuatorOutputOption(
+              '执行器输出通道',
+              outputSeries,
+              outputTimeRange,
+              visibleRange,
+            )}
+            style={{ height: 280 }}
+            timeRange={outputTimeRange}
+            onChartReady={onChartReady}
+            onChartDispose={onChartDispose}
+            onTimelineSeek={onTimelineSeek}
+            onToggleTimelinePlayback={onToggleTimelinePlayback}
+          />
+        </div>
+      ) : (
+        <p
+          id={getLoopAnchorId(chartKeyPrefix, 'actuator')}
+          className={`hint${
+            isHighlighted ? ' control-quality-chart-highlight' : ''
+          }`}
+        >
+          当前分析区间没有可用执行器输出曲线。
+        </p>
+      )}
     </section>
   )
 }
 
 function ControlQualityPanel({
+  chartKeyPrefix,
+  rangeGroupKey,
+  selectionBox,
+  timelinePointer,
+  isTimelinePlaying = false,
+  linkedRange,
   report,
   isLoading,
   errorText,
+  onChartReady,
+  onChartDispose,
+  onTimelineSeek,
+  onToggleTimelinePlayback,
   onApplyRange,
-  onExportCsv,
 }: ControlQualityPanelProps) {
-  const initialStart = report?.analysis_time_range.start_s ?? ''
-  const initialEnd = report?.analysis_time_range.end_s ?? ''
-  const rangeKey = `${initialStart}-${initialEnd}`
+  const initialStart =
+    linkedRange?.startS ?? report?.analysis_time_range.start_s ?? null
+  const initialEnd =
+    linkedRange?.endS ?? report?.analysis_time_range.end_s ?? null
+  const initialStartValue = formatRangeInputValue(initialStart)
+  const initialEndValue = formatRangeInputValue(initialEnd)
+  const rangeKey = `${initialStartValue}-${initialEndValue}`
+  const linkedAnalysisRange = linkedRange
+    ? {
+        startS: linkedRange.startS,
+        endS: linkedRange.endS,
+      }
+    : null
+  const [highlightedLoop, setHighlightedLoop] = useState<LoopName | null>(null)
+  const highlightTimerRef = useRef<number | null>(null)
 
-  const reportFileStem = useMemo(
-    () => (report?.log_file || 'control-quality').replace(/[^a-z0-9_.-]+/gi, '_'),
-    [report?.log_file],
-  )
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current)
+      }
+    }
+  }, [])
 
   if (!report && !isLoading && !errorText) {
     return null
@@ -395,22 +882,22 @@ function ControlQualityPanel({
     )
   }
 
-  const handleExportJson = () => {
-    if (!report) return
-    downloadText(
-      `${reportFileStem}.control-quality.json`,
-      JSON.stringify(report, null, 2),
-      'application/json;charset=utf-8',
-    )
-  }
+  const handleControlFlowNodeClick = (loopName: LoopName) => {
+    const target = document.getElementById(getLoopAnchorId(chartKeyPrefix, loopName))
 
-  const handleExportHtml = () => {
-    if (!report) return
-    downloadText(
-      `${reportFileStem}.control-quality.html`,
-      buildReportHtml(report),
-      'text/html;charset=utf-8',
-    )
+    target?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    })
+
+    setHighlightedLoop(loopName)
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current)
+    }
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightedLoop(null)
+      highlightTimerRef.current = null
+    }, 1500)
   }
 
   return (
@@ -424,17 +911,6 @@ function ControlQualityPanel({
             </p>
           ) : null}
         </div>
-        <div className="actions control-quality-actions">
-          <button className="button" type="button" onClick={handleExportJson} disabled={!report}>
-            导出 JSON
-          </button>
-          <button className="button" type="button" onClick={onExportCsv} disabled={!report}>
-            导出 CSV
-          </button>
-          <button className="button" type="button" onClick={handleExportHtml} disabled={!report}>
-            导出 HTML
-          </button>
-        </div>
       </div>
 
       <form
@@ -446,20 +922,21 @@ function ControlQualityPanel({
           <span className="tuning-subtitle">开始时间 (s)</span>
           <input
             name="startS"
-            className="input tuning-input"
-            defaultValue={String(initialStart)}
+            className="input tuning-input control-quality-range-input"
+            defaultValue={initialStartValue}
           />
         </label>
         <label className="tuning-field">
           <span className="tuning-subtitle">结束时间 (s)</span>
           <input
             name="endS"
-            className="input tuning-input"
-            defaultValue={String(initialEnd)}
+            className="input tuning-input control-quality-range-input"
+            defaultValue={initialEndValue}
           />
         </label>
-        <button className="button" type="submit">
-          重新计算
+        <button className="button control-quality-refresh-button" type="submit">
+          <span className="control-quality-refresh-icon" aria-hidden="true">↻</span>
+          <span>重新计算</span>
         </button>
       </form>
 
@@ -483,13 +960,42 @@ function ControlQualityPanel({
               <li key={hint}>{formatHint(hint)}</li>
             ))}
           </ul>
+          <ControlFlowNodes
+            chartKeyPrefix={chartKeyPrefix}
+            report={report}
+            onNodeClick={handleControlFlowNodeClick}
+          />
           <div className="control-quality-loop-list">
-            <ActuatorSummary loop={report.loops.actuator} />
+            <ActuatorSummary
+              chartKeyPrefix={chartKeyPrefix}
+              rangeGroupKey={rangeGroupKey}
+              selectionBox={selectionBox}
+              timelinePointer={timelinePointer}
+              isTimelinePlaying={isTimelinePlaying}
+              visibleRange={linkedAnalysisRange}
+              loop={report.loops.actuator}
+              isHighlighted={highlightedLoop === 'actuator'}
+              onChartReady={onChartReady}
+              onChartDispose={onChartDispose}
+              onTimelineSeek={onTimelineSeek}
+              onToggleTimelinePlayback={onToggleTimelinePlayback}
+            />
             {LOOP_ORDER.filter((loopName) => loopName !== 'actuator').map((loopName) => (
               <ControlLoopCard
                 key={loopName}
+                chartKeyPrefix={chartKeyPrefix}
+                rangeGroupKey={rangeGroupKey}
+                selectionBox={selectionBox}
+                timelinePointer={timelinePointer}
+                isTimelinePlaying={isTimelinePlaying}
+                visibleRange={linkedAnalysisRange}
                 loopName={loopName}
                 loop={report.loops[loopName]}
+                isHighlighted={highlightedLoop === loopName}
+                onChartReady={onChartReady}
+                onChartDispose={onChartDispose}
+                onTimelineSeek={onTimelineSeek}
+                onToggleTimelinePlayback={onToggleTimelinePlayback}
               />
             ))}
           </div>

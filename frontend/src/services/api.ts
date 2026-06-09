@@ -1,5 +1,6 @@
 import type {
   BatchAnalyzeLogsResponse,
+  BatchControlQualityResponse,
   ChartDataResponse,
   ControlQualityPayload,
   ControlQualityReport,
@@ -49,6 +50,35 @@ export async function batchAnalyzeLogFiles(
 
   if (!response.ok) {
     let errorMessage = 'BATCH_ANALYZE_FAILED'
+    try {
+      const payload = await response.json()
+      if (payload && typeof payload.message === 'string') {
+        errorMessage = payload.message
+      }
+    } catch {
+      // ignore JSON parse error and keep default message
+    }
+    throw new Error(errorMessage)
+  }
+
+  return response.json()
+}
+
+export async function batchCalculateControlQuality(
+  files: File[],
+): Promise<BatchControlQualityResponse> {
+  const formData = new FormData()
+  files.forEach((file) => {
+    formData.append('logFiles', file)
+  })
+
+  const response = await fetch(`${API_BASE_URL}/logs/control-quality/batch`, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    let errorMessage = 'BATCH_CONTROL_QUALITY_FAILED'
     try {
       const payload = await response.json()
       if (payload && typeof payload.message === 'string') {

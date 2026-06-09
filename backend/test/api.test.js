@@ -28,3 +28,21 @@ test('POST /api/logs/batch-analyze returns structured failure results', async ()
     },
   ]);
 });
+
+test('POST /api/logs/control-quality/batch returns structured failure results', async () => {
+  const response = await request(app)
+    .post('/api/logs/control-quality/batch')
+    .attach('logFiles', Buffer.from('not a ulog'), 'bad-log.txt')
+    .expect(200);
+
+  assert.deepEqual(response.body.reports, []);
+  assert.equal(response.body.total, 1);
+  assert.equal(response.body.successCount, 0);
+  assert.equal(response.body.failedCount, 1);
+  assert.deepEqual(response.body.failedLogs, [
+    {
+      fileName: 'bad-log.txt',
+      reason: 'Only .ulg files are supported now.',
+    },
+  ]);
+});

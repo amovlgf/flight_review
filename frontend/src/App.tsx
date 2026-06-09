@@ -16,8 +16,8 @@ import type {
 import LogSelector from './components/LogSelector'
 import UploadPanel from './components/UploadPanel'
 import {
+  batchCalculateControlQuality,
   calculateControlQuality,
-  exportControlQualityCsv,
   fetchChartData,
   fetchLogList,
   uploadLogFile,
@@ -30,9 +30,7 @@ import {
 
 type ChartAction = {
   type: string
-  dataZoomIndex?: number
-  start?: number
-  end?: number
+  [key: string]: unknown
 }
 
 type ChartZoomState = {
@@ -42,7 +40,16 @@ type ChartZoomState = {
 
 type ChartInstance = {
   getDom: () => HTMLElement
+  getHeight: () => number
   getOption: () => { dataZoom?: ChartZoomState[] }
+  convertFromPixel: (
+    finder: Record<string, unknown>,
+    value: number | number[],
+  ) => number | number[]
+  convertToPixel: (
+    finder: Record<string, unknown>,
+    value: number | number[],
+  ) => number | number[]
   dispatchAction: (action: ChartAction) => void
   on: (eventName: 'datazoom', handler: () => void) => void
   off: (eventName: 'datazoom', handler: () => void) => void
@@ -52,12 +59,35 @@ type ChartInstance = {
 type ChartRegistryItem = {
   chart: ChartInstance
   timeRange: ChartTimeRange
+  rangeGroupKey?: string
+}
+
+type ControlQualityLinkedRange = {
+  startS: number
+  endS: number
 }
 
 type ViewMode = 'home' | 'log-analysis' | 'batch' | 'control-analysis'
 type LogAnalysisStep = 'upload' | 'chart'
 
+type ControlAnalysisReportItem = {
+  clientId: string
+  fileName: string
+  logId: string
+  report: ControlQualityReport | null
+  isLoading: boolean
+  errorText: string
+}
+
 const PAGE_SIZE = 8
+const TIMELINE_PLAYBACK_SPEED = 1
+const TIMELINE_FINE_STEP_MIN_S = 0.05
+const TIMELINE_FINE_STEP_MAX_S = 1
+
+function getFileSelectionKey(file: File) {
+  return `${file.name}-${file.size}-${file.lastModified}`
+}
+
 function clampPercent(value: number) {
   return Math.min(Math.max(value, 0), 100)
 }
@@ -74,14 +104,27 @@ function timeValueToPercent(value: number, timeRange: ChartTimeRange) {
   return clampPercent(((value - timeRange.start) / span) * 100)
 }
 
-function downloadTextFile(fileName: string, content: string, mimeType: string) {
-  const blob = new Blob([content], { type: mimeType })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = fileName
-  anchor.click()
-  URL.revokeObjectURL(url)
+function normalizePixelTimeValue(value: number | number[]) {
+  const timeValue = Array.isArray(value) ? value[0] : value
+  return typeof timeValue === 'number' && Number.isFinite(timeValue)
+    ? timeValue
+    : null
+}
+
+function clampTimeValue(value: number, timeRange: ChartTimeRange) {
+  return Math.min(Math.max(value, timeRange.start), timeRange.end)
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+
+  return Boolean(
+    target.closest(
+      'input, textarea, select, button, a, [contenteditable="true"]',
+    ) || target.isContentEditable,
+  )
 }
 
 function isChartDisposed(chart: ChartInstance) {
@@ -96,6 +139,10 @@ function App() {
   const chartCleanupRef = useRef<Map<string, () => void>>(new Map())
   const chartRegistryRef = useRef<Map<string, ChartRegistryItem>>(new Map())
   const isSyncingZoomRef = useRef(false)
+  const isGlobalChartSyncEnabledRef = useRef(false)
+  const timelinePointerRef = useRef<number | null>(null)
+  const isTimelinePlayingRef = useRef(false)
+  const activeTimelineChartKeyRef = useRef<string | null>(null)
   const [selectedFileName, setSelectedFileName] = useState('')
   const [isUploading, setIsUploading] = useState(false)
   const [selectedLogId, setSelectedLogId] = useState('')
@@ -119,18 +166,45 @@ function App() {
   const [logAnalysisStep, setLogAnalysisStep] =
     useState<LogAnalysisStep>('upload')
   const controlAnalysisFileInputRef = useRef<HTMLInputElement | null>(null)
-  const [controlAnalysisFileName, setControlAnalysisFileName] = useState('')
+  const [controlAnalysisFiles, setControlAnalysisFiles] = useState<File[]>([])
   const [isControlAnalysisUploading, setIsControlAnalysisUploading] =
     useState(false)
   const [controlAnalysisStatusText, setControlAnalysisStatusText] = useState('')
-  const [controlAnalysisLogId, setControlAnalysisLogId] = useState('')
+  const [controlAnalysisReports, setControlAnalysisReports] = useState<
+    ControlAnalysisReportItem[]
+  >([])
+  const [controlQualityLinkedRanges, setControlQualityLinkedRanges] = useState<
+    Record<string, ControlQualityLinkedRange>
+  >({})
   const [selectionBox, setSelectionBox] = useState<ChartSelectionPreview | null>(
     null,
   )
-  const [controlQualityReport, setControlQualityReport] =
-    useState<ControlQualityReport | null>(null)
-  const [isControlQualityLoading, setIsControlQualityLoading] = useState(false)
-  const [controlQualityError, setControlQualityError] = useState('')
+  const [isGlobalChartSyncEnabled, setIsGlobalChartSyncEnabled] = useState(false)
+  const [timelinePointer, setTimelinePointer] = useState<number | null>(null)
+  const [isTimelinePlaying, setIsTimelinePlaying] = useState(false)
+
+  useEffect(() => {
+    isGlobalChartSyncEnabledRef.current = isGlobalChartSyncEnabled
+    if (!isGlobalChartSyncEnabled) {
+      chartRegistryRef.current.forEach((item, chartKey) => {
+        if (isChartDisposed(item.chart)) {
+          chartRegistryRef.current.delete(chartKey)
+          chartCleanupRef.current.delete(chartKey)
+          return
+        }
+        try {
+          item.chart.dispatchAction({ type: 'hideTip' })
+        } catch {
+          chartRegistryRef.current.delete(chartKey)
+          chartCleanupRef.current.delete(chartKey)
+        }
+      })
+    }
+  }, [isGlobalChartSyncEnabled])
+
+  useEffect(() => {
+    isTimelinePlayingRef.current = isTimelinePlaying
+  }, [isTimelinePlaying])
 
   const loadLogList = async (options?: {
     preferLogId?: string
@@ -209,8 +283,6 @@ function App() {
       setTopicCharts([])
       setModeSegments([])
       setDiagnostics([])
-      setControlQualityReport(null)
-      setControlQualityError('')
       setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
       setActiveLogMeta(null)
       setSelectionBox(null)
@@ -237,8 +309,6 @@ function App() {
       setTopicCharts([])
       setModeSegments([])
       setDiagnostics([])
-      setControlQualityReport(null)
-      setControlQualityError('')
       setActiveLogMeta(null)
       setSelectionBox(null)
       setStatusText('\u4e0a\u4f20\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u540e\u7aef\u662f\u5426\u542f\u52a8\u3002')
@@ -251,13 +321,15 @@ function App() {
     chartCleanupRef.current.forEach((cleanup) => cleanup())
     chartCleanupRef.current.clear()
     chartRegistryRef.current.clear()
+    activeTimelineChartKeyRef.current = null
+    timelinePointerRef.current = null
+    setTimelinePointer(null)
+    setIsTimelinePlaying(false)
     setSelectionBox(null)
   }, [])
 
   const handleBackToHome = () => {
     cleanupChartInteractions()
-    setControlQualityReport(null)
-    setControlQualityError('')
     setViewMode('home')
   }
 
@@ -277,11 +349,13 @@ function App() {
 
   const handleEnterControlAnalysis = () => {
     setViewMode('control-analysis')
-    setControlQualityReport(null)
-    setControlQualityError('')
-    setControlAnalysisLogId('')
+    setControlAnalysisReports([])
+    setControlQualityLinkedRanges({})
     setControlAnalysisStatusText('')
-    setControlAnalysisFileName('')
+    setControlAnalysisFiles([])
+    if (controlAnalysisFileInputRef.current) {
+      controlAnalysisFileInputRef.current.value = ''
+    }
   }
 
   const handleChooseControlAnalysisFile = () => {
@@ -291,43 +365,77 @@ function App() {
   const handleControlAnalysisFileChange = (
     event: ChangeEvent<HTMLInputElement>,
   ) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-    setControlAnalysisFileName(file.name)
+    const files = Array.from(event.target.files ?? [])
+    if (files.length === 0) return
+    const nextFiles = [...controlAnalysisFiles]
+    const existingKeys = new Set(nextFiles.map(getFileSelectionKey))
+    for (const file of files) {
+      const key = getFileSelectionKey(file)
+      if (!existingKeys.has(key)) {
+        nextFiles.push(file)
+        existingKeys.add(key)
+      }
+    }
+    setControlAnalysisFiles(nextFiles)
     setControlAnalysisStatusText(
-      '\u5df2\u9009\u62e9\u63a7\u5236\u73af\u8def\u5206\u6790\u65e5\u5fd7\uff0c\u8bf7\u70b9\u51fb\u4e0a\u4f20\u65e5\u5fd7\u6587\u4ef6\u3002',
+      `\u5df2\u9009\u62e9 ${nextFiles.length} \u4efd\u63a7\u5236\u73af\u8def\u5206\u6790\u65e5\u5fd7\uff0c\u8bf7\u70b9\u51fb\u4e0a\u4f20\u5e76\u5bf9\u6bd4\u65e5\u5fd7\u3002`,
     )
+    event.target.value = ''
   }
 
   const handleUploadControlAnalysisLog = async () => {
-    const file = controlAnalysisFileInputRef.current?.files?.[0] ?? null
-    if (!file) {
+    const files =
+      controlAnalysisFiles.length > 0
+        ? controlAnalysisFiles
+        : Array.from(controlAnalysisFileInputRef.current?.files ?? [])
+    if (files.length === 0) {
       setControlAnalysisStatusText(
-        '\u8bf7\u5148\u9009\u62e9\u7528\u4e8e\u63a7\u5236\u73af\u8def\u5206\u6790\u7684 .ulg \u65e5\u5fd7\u3002',
+        '\u8bf7\u5148\u9009\u62e9\u7528\u4e8e\u63a7\u5236\u73af\u8def\u5206\u6790\u7684 .ulg \u65e5\u5fd7\uff0c\u53ef\u4ee5\u4e00\u6b21\u9009\u62e9\u591a\u4efd\u3002',
       )
       return
     }
 
+    const nextItems = files.map((file, index) => ({
+      clientId: `${file.name}-${file.size}-${file.lastModified}-${index}`,
+      fileName: file.name,
+      logId: '',
+      report: null,
+      isLoading: true,
+      errorText: '',
+    }))
     try {
       setIsControlAnalysisUploading(true)
       setControlAnalysisStatusText(
-        '\u6b63\u5728\u4e0a\u4f20\u65e5\u5fd7\u5e76\u8ba1\u7b97\u63a7\u5236\u73af\u6307\u6807...',
+        `\u6b63\u5728\u4e00\u6b21\u6027\u4e0a\u4f20 ${files.length} \u4efd\u65e5\u5fd7\u5e76\u8ba1\u7b97\u63a7\u5236\u73af\u6307\u6807...`,
       )
-      setControlQualityReport(null)
-      setControlQualityError('')
-      setControlAnalysisLogId('')
+      setControlAnalysisReports(nextItems)
+      setControlQualityLinkedRanges({})
 
-      const uploadResult = await uploadLogFile(file)
-      const logId =
-        uploadResult && typeof uploadResult.logId === 'string'
-          ? uploadResult.logId
-          : ''
-      if (!logId) throw new Error('LOG_ID_MISSING')
+      const result = await batchCalculateControlQuality(files)
+      const reports = Array.isArray(result.reports) ? result.reports : []
+      const failedLogs = Array.isArray(result.failedLogs) ? result.failedLogs : []
 
-      setControlAnalysisLogId(logId)
-      await loadControlQuality(logId)
+      setControlAnalysisReports([
+        ...reports.map((item, index) => ({
+          clientId: `${item.logId}-${index}`,
+          fileName: item.fileName,
+          logId: item.logId,
+          report: item.report,
+          isLoading: false,
+          errorText: '',
+        })),
+        ...failedLogs.map((item, index) => ({
+          clientId: `failed-${item.fileName}-${index}`,
+          fileName: item.fileName,
+          logId: '',
+          report: null,
+          isLoading: false,
+          errorText: item.reason || '\u65e5\u5fd7\u4e0a\u4f20\u6216\u63a7\u5236\u73af\u5206\u6790\u5931\u8d25\u3002',
+        })),
+      ])
+
       setControlAnalysisStatusText(
-        `\u65e5\u5fd7\u5df2\u4e0a\u4f20\u5e76\u5b8c\u6210\u63a7\u5236\u73af\u5206\u6790\uff08\u65e5\u5fd7\u7f16\u53f7\uff1a${logId}\uff09\u3002`,
+        `\u63a7\u5236\u73af\u5206\u6790\u5b8c\u6210\uff1a${result.successCount} \u4efd\u6210\u529f\uff0c${result.failedCount} \u4efd\u5931\u8d25\u3002`,
       )
     } catch {
       setControlAnalysisStatusText(
@@ -338,22 +446,44 @@ function App() {
     }
   }
 
-  const loadControlQuality = async (
+  const loadControlQualityForItem = async (
+    clientId: string,
     logId: string,
     segment?: { startS: number | null; endS: number | null; source?: string },
-  ) => {
+  ): Promise<boolean> => {
+    setControlAnalysisReports((currentItems) =>
+      currentItems.map((item) =>
+        item.clientId === clientId
+          ? { ...item, logId, isLoading: true, errorText: '' }
+          : item,
+      ),
+    )
+
     try {
-      setIsControlQualityLoading(true)
-      setControlQualityError('')
       const report = await calculateControlQuality({ logId, segment })
-      setControlQualityReport(report)
-    } catch {
-      setControlQualityReport(null)
-      setControlQualityError(
-        '\u63a7\u5236\u73af\u6307\u6807\u8ba1\u7b97\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u65e5\u5fd7\u5305\u542b PX4 \u63a7\u5236\u76f8\u5173 topic\u3002',
+      setControlAnalysisReports((currentItems) =>
+        currentItems.map((item) =>
+          item.clientId === clientId
+            ? { ...item, logId, report, isLoading: false, errorText: '' }
+            : item,
+        ),
       )
-    } finally {
-      setIsControlQualityLoading(false)
+      return true
+    } catch {
+      setControlAnalysisReports((currentItems) =>
+        currentItems.map((item) =>
+          item.clientId === clientId
+            ? {
+                ...item,
+                logId,
+                isLoading: false,
+                errorText:
+                  '\u63a7\u5236\u73af\u6307\u6807\u8ba1\u7b97\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u65e5\u5fd7\u5305\u542b PX4 \u63a7\u5236\u76f8\u5173 topic\u3002',
+              }
+            : item,
+        ),
+      )
+      return false
     }
   }
 
@@ -366,8 +496,6 @@ function App() {
         setSeriesData([])
         setTopicCharts([])
         setModeSegments([])
-        setControlQualityReport(null)
-        setControlQualityError('')
         setChartHint(
           `\u5df2\u8c03\u7528\u56fe\u8868\u63a5\u53e3\uff08logId: ${logId}\uff09\uff1a\u5f53\u524d\u8fd4\u56de\u7a7a\u6570\u636e\uff08\u5360\u4f4d\uff09`,
         )
@@ -408,8 +536,6 @@ function App() {
       setSeriesData([])
       setTopicCharts([])
       setModeSegments([])
-      setControlQualityReport(null)
-      setControlQualityError('')
       setActiveLogMeta(null)
       setSelectionBox(null)
       void loadLogList({ preferLogId: '' })
@@ -426,8 +552,6 @@ function App() {
     setTopicCharts([])
     setModeSegments([])
     setDiagnostics([])
-    setControlQualityReport(null)
-    setControlQualityError('')
     setActiveLogMeta(null)
     setSelectionBox(null)
     if (logId) {
@@ -438,44 +562,22 @@ function App() {
   }
 
   const handleApplyControlQualityRange = async (
+    item: ControlAnalysisReportItem,
     startS: number | null,
     endS: number | null,
   ) => {
-    if (!controlAnalysisLogId) return
-    await loadControlQuality(controlAnalysisLogId, {
+    if (!item.logId) return
+    await loadControlQualityForItem(item.clientId, item.logId, {
       startS,
       endS,
       source: startS !== null && endS !== null ? 'manual' : 'auto',
     })
   }
 
-  const handleExportControlQualityCsv = async () => {
-    if (!controlAnalysisLogId || !controlQualityReport) return
-    const csv = await exportControlQualityCsv({
-      logId: controlAnalysisLogId,
-      segment: {
-        startS: controlQualityReport.analysis_time_range.start_s,
-        endS: controlQualityReport.analysis_time_range.end_s,
-        source: controlQualityReport.analysis_time_range.source,
-      },
-    })
-    const fileStem = (controlQualityReport.log_file || 'control-quality').replace(
-      /[^a-z0-9_.-]+/gi,
-      '_',
-    )
-    downloadTextFile(
-      `${fileStem}.control-quality.csv`,
-      csv,
-      'text/csv;charset=utf-8',
-    )
-  }
-
   const handleSearch = async () => {
     await loadLogList({ page: 1, keyword: searchKeyword })
     setSeriesData([])
     setDiagnostics([])
-    setControlQualityReport(null)
-    setControlQualityError('')
     setActiveLogMeta(null)
     setChartHint('\u65e5\u5fd7\u5217\u8868\u5df2\u66f4\u65b0\uff0c\u8bf7\u9009\u62e9\u65e5\u5fd7\u540e\u67e5\u770b\u56fe\u8868\u3002')
   }
@@ -490,11 +592,185 @@ function App() {
     await loadLogList({ page: listPage + 1 })
   }
 
+  const getUsableChartEntries = useCallback(() => {
+    const entries: Array<[string, ChartRegistryItem]> = []
+    chartRegistryRef.current.forEach((item, chartKey) => {
+      if (
+        !item ||
+        isChartDisposed(item.chart) ||
+        item.timeRange.end <= item.timeRange.start
+      ) {
+        chartRegistryRef.current.delete(chartKey)
+        chartCleanupRef.current.delete(chartKey)
+        return
+      }
+
+      entries.push([chartKey, item])
+    })
+    return entries
+  }, [])
+
+  const getTimelineBounds = useCallback(() => {
+    let start = Infinity
+    let end = -Infinity
+
+    getUsableChartEntries().forEach(([, item]) => {
+      start = Math.min(start, item.timeRange.start)
+      end = Math.max(end, item.timeRange.end)
+    })
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      return null
+    }
+
+    return { start, end }
+  }, [getUsableChartEntries])
+
+  const getTimelineAnchorEntry = useCallback(() => {
+    const entries = getUsableChartEntries()
+    const activeChartKey = activeTimelineChartKeyRef.current
+    if (activeChartKey) {
+      const activeEntry = entries.find(([chartKey]) => chartKey === activeChartKey)
+      if (activeEntry) {
+        return activeEntry
+      }
+    }
+
+    return entries[0] ?? null
+  }, [getUsableChartEntries])
+
+  const getTimelineVisibleSpan = useCallback(() => {
+    const anchorEntry = getTimelineAnchorEntry()
+    if (!anchorEntry) {
+      return null
+    }
+
+    const [, item] = anchorEntry
+    const fullSpan = item.timeRange.end - item.timeRange.start
+    const zoomState = item.chart.getOption()?.dataZoom?.[0]
+    const startPercent = Number(zoomState?.start ?? 0)
+    const endPercent = Number(zoomState?.end ?? 100)
+    const startTime = percentToTimeValue(startPercent, item.timeRange)
+    const endTime = percentToTimeValue(endPercent, item.timeRange)
+    const visibleSpan = Math.abs(endTime - startTime)
+
+    return visibleSpan > 0 ? visibleSpan : fullSpan
+  }, [getTimelineAnchorEntry])
+
+  const getTimelineKeyboardStep = useCallback((isCoarseStep: boolean) => {
+    const visibleSpan = getTimelineVisibleSpan()
+    const baseStep =
+      visibleSpan && visibleSpan > 0
+        ? visibleSpan / 200
+        : TIMELINE_FINE_STEP_MIN_S
+    const fineStep = Math.min(
+      Math.max(baseStep, TIMELINE_FINE_STEP_MIN_S),
+      TIMELINE_FINE_STEP_MAX_S,
+    )
+
+    return isCoarseStep ? fineStep * 10 : fineStep
+  }, [getTimelineVisibleSpan])
+
+  const showTimelineCursor = useCallback((timeValue: number) => {
+    getUsableChartEntries().forEach(([chartKey, item]) => {
+      try {
+        const chartTime = clampTimeValue(timeValue, item.timeRange)
+        const pixelValue = item.chart.convertToPixel(
+          { xAxisIndex: 0 },
+          chartTime,
+        )
+        const x = Array.isArray(pixelValue) ? pixelValue[0] : pixelValue
+        if (typeof x !== 'number' || !Number.isFinite(x)) {
+          return
+        }
+
+        item.chart.dispatchAction({
+          type: 'showTip',
+          x,
+          y: Math.max(1, item.chart.getHeight() / 2),
+        })
+      } catch {
+        chartRegistryRef.current.delete(chartKey)
+        chartCleanupRef.current.delete(chartKey)
+      }
+    })
+  }, [getUsableChartEntries])
+
+  const hideTimelineCursor = useCallback(() => {
+    getUsableChartEntries().forEach(([chartKey, item]) => {
+      try {
+        item.chart.dispatchAction({ type: 'hideTip' })
+      } catch {
+        chartRegistryRef.current.delete(chartKey)
+        chartCleanupRef.current.delete(chartKey)
+      }
+    })
+  }, [getUsableChartEntries])
+
+  const setTimelineTime = useCallback((
+    timeValue: number,
+    options?: { pauseAtEnd?: boolean },
+  ) => {
+    const bounds = getTimelineBounds()
+    if (!bounds) {
+      timelinePointerRef.current = null
+      setTimelinePointer(null)
+      setIsTimelinePlaying(false)
+      hideTimelineCursor()
+      return null
+    }
+
+    const nextTime = clampTimeValue(timeValue, bounds)
+    timelinePointerRef.current = nextTime
+    setTimelinePointer(nextTime)
+    showTimelineCursor(nextTime)
+
+    if (options?.pauseAtEnd && nextTime >= bounds.end) {
+      setIsTimelinePlaying(false)
+    }
+
+    return nextTime
+  }, [getTimelineBounds, hideTimelineCursor, showTimelineCursor])
+
+  const moveTimelinePointer = useCallback((
+    direction: -1 | 1,
+    isCoarseStep = false,
+  ) => {
+    const bounds = getTimelineBounds()
+    if (!bounds) {
+      return
+    }
+
+    const currentTime = timelinePointerRef.current ?? bounds.start
+    const step = getTimelineKeyboardStep(isCoarseStep)
+    setTimelineTime(currentTime + direction * step)
+  }, [getTimelineBounds, getTimelineKeyboardStep, setTimelineTime])
+
+  const toggleTimelinePlayback = useCallback(() => {
+    const bounds = getTimelineBounds()
+    if (!bounds) {
+      return
+    }
+
+    if (
+      timelinePointerRef.current === null ||
+      timelinePointerRef.current >= bounds.end
+    ) {
+      setTimelineTime(bounds.start)
+    }
+
+    setIsTimelinePlaying((current) => !current)
+  }, [getTimelineBounds, setTimelineTime])
+
   const syncChartZoom = useCallback((
     sourceChartKey: string,
     sourceStartPercent: number,
     sourceEndPercent: number,
   ) => {
+    if (!isGlobalChartSyncEnabledRef.current) {
+      return
+    }
+
     const source = chartRegistryRef.current.get(sourceChartKey)
     if (!source || isSyncingZoomRef.current || isChartDisposed(source.chart)) {
       chartRegistryRef.current.delete(sourceChartKey)
@@ -506,6 +782,14 @@ function App() {
       source.timeRange,
     )
     const sourceEndTime = percentToTimeValue(sourceEndPercent, source.timeRange)
+    const nextLinkedRanges: Record<string, ControlQualityLinkedRange> = {}
+
+    if (source.rangeGroupKey) {
+      nextLinkedRanges[source.rangeGroupKey] = {
+        startS: Math.min(sourceStartTime, sourceEndTime),
+        endS: Math.max(sourceStartTime, sourceEndTime),
+      }
+    }
 
     isSyncingZoomRef.current = true
     chartRegistryRef.current.forEach((target, targetChartKey) => {
@@ -518,17 +802,19 @@ function App() {
 
       const targetStart = timeValueToPercent(sourceStartTime, target.timeRange)
       const targetEnd = timeValueToPercent(sourceEndTime, target.timeRange)
+      if (target.rangeGroupKey) {
+        const targetStartTime = percentToTimeValue(targetStart, target.timeRange)
+        const targetEndTime = percentToTimeValue(targetEnd, target.timeRange)
+        nextLinkedRanges[target.rangeGroupKey] = {
+          startS: Math.min(targetStartTime, targetEndTime),
+          endS: Math.max(targetStartTime, targetEndTime),
+        }
+      }
 
       try {
         target.chart.dispatchAction({
           type: 'dataZoom',
           dataZoomIndex: 0,
-          start: targetStart,
-          end: targetEnd,
-        })
-        target.chart.dispatchAction({
-          type: 'dataZoom',
-          dataZoomIndex: 1,
           start: targetStart,
           end: targetEnd,
         })
@@ -540,7 +826,136 @@ function App() {
     window.setTimeout(() => {
       isSyncingZoomRef.current = false
     }, 0)
+
+    if (Object.keys(nextLinkedRanges).length > 0) {
+      setControlQualityLinkedRanges((current) => ({
+        ...current,
+        ...nextLinkedRanges,
+      }))
+    }
   }, [])
+
+  const syncChartCursor = useCallback((sourceChartKey: string, timeValue: number) => {
+    if (!isGlobalChartSyncEnabledRef.current) {
+      return
+    }
+
+    chartRegistryRef.current.forEach((target, targetChartKey) => {
+      if (targetChartKey === sourceChartKey) return
+      if (isChartDisposed(target.chart)) {
+        chartRegistryRef.current.delete(targetChartKey)
+        chartCleanupRef.current.delete(targetChartKey)
+        return
+      }
+
+      try {
+        const pixelValue = target.chart.convertToPixel({ xAxisIndex: 0 }, timeValue)
+        const x = Array.isArray(pixelValue) ? pixelValue[0] : pixelValue
+        if (typeof x !== 'number' || !Number.isFinite(x)) {
+          return
+        }
+
+        target.chart.dispatchAction({
+          type: 'showTip',
+          x,
+          y: Math.max(1, target.chart.getHeight() / 2),
+        })
+      } catch {
+        chartRegistryRef.current.delete(targetChartKey)
+        chartCleanupRef.current.delete(targetChartKey)
+      }
+    })
+  }, [])
+
+  const clearSyncedChartCursor = useCallback((sourceChartKey?: string) => {
+    if (!isGlobalChartSyncEnabledRef.current) {
+      return
+    }
+
+    chartRegistryRef.current.forEach((target, targetChartKey) => {
+      if (targetChartKey === sourceChartKey) return
+      if (isChartDisposed(target.chart)) {
+        chartRegistryRef.current.delete(targetChartKey)
+        chartCleanupRef.current.delete(targetChartKey)
+        return
+      }
+      try {
+        target.chart.dispatchAction({ type: 'hideTip' })
+      } catch {
+        chartRegistryRef.current.delete(targetChartKey)
+        chartCleanupRef.current.delete(targetChartKey)
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!isTimelinePlaying) {
+      return undefined
+    }
+
+    let animationFrameId = 0
+    let lastFrameAt = performance.now()
+
+    const tick = (frameAt: number) => {
+      const bounds = getTimelineBounds()
+      if (!bounds) {
+        setIsTimelinePlaying(false)
+        return
+      }
+
+      const elapsedS = Math.max(0, (frameAt - lastFrameAt) / 1000)
+      lastFrameAt = frameAt
+      const currentTime = timelinePointerRef.current ?? bounds.start
+      const nextTime = currentTime + elapsedS * TIMELINE_PLAYBACK_SPEED
+
+      setTimelineTime(nextTime, { pauseAtEnd: true })
+      if (nextTime < bounds.end && isTimelinePlayingRef.current) {
+        animationFrameId = window.requestAnimationFrame(tick)
+      }
+    }
+
+    animationFrameId = window.requestAnimationFrame(tick)
+    return () => {
+      window.cancelAnimationFrame(animationFrameId)
+    }
+  }, [getTimelineBounds, isTimelinePlaying, setTimelineTime])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        isEditableKeyboardTarget(event.target) ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey
+      ) {
+        return
+      }
+
+      if (event.code === 'Space') {
+        event.preventDefault()
+        toggleTimelinePlayback()
+        return
+      }
+
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        setIsTimelinePlaying(false)
+        moveTimelinePointer(-1, event.shiftKey)
+        return
+      }
+
+      if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        setIsTimelinePlaying(false)
+        moveTimelinePointer(1, event.shiftKey)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [moveTimelinePointer, toggleTimelinePlayback])
 
   const clearSelectionPreview = useCallback((chartKey?: string) => {
     setSelectionBox((current) => {
@@ -560,6 +975,7 @@ function App() {
     chartKey: string,
     chartInstance: unknown,
     timeRange: ChartTimeRange,
+    rangeGroupKey?: string,
   ) => {
     const chart = chartInstance as ChartInstance
     if (!chart || isChartDisposed(chart)) {
@@ -567,7 +983,10 @@ function App() {
     }
     const oldCleanup = chartCleanupRef.current.get(chartKey)
     if (oldCleanup) oldCleanup()
-    chartRegistryRef.current.set(chartKey, { chart, timeRange })
+    chartRegistryRef.current.set(chartKey, { chart, timeRange, rangeGroupKey })
+    if (timelinePointerRef.current !== null) {
+      showTimelineCursor(timelinePointerRef.current)
+    }
 
     const dom = chart.getDom()
     let isMiddleDragging = false
@@ -586,12 +1005,6 @@ function App() {
         chart.dispatchAction({
           type: 'dataZoom',
           dataZoomIndex: 0,
-          start,
-          end,
-        })
-        chart.dispatchAction({
-          type: 'dataZoom',
-          dataZoomIndex: 1,
           start,
           end,
         })
@@ -642,25 +1055,53 @@ function App() {
       })
     }
 
-    const finishLeftSelection = (clientX: number) => {
+    const finishLeftSelection = (clientX: number, clientY: number) => {
       if (!isLeftSelecting) return
       const rect = dom.getBoundingClientRect()
       const endX = Math.min(Math.max(clientX - rect.left, 0), rect.width)
-      const delta = Math.abs(endX - selectStartX)
+      const endY = Math.min(Math.max(clientY - rect.top, 0), rect.height)
+      const normalizedBox = normalizeSelectionBox(
+        { x: selectStartX, y: selectStartY },
+        { x: endX, y: endY },
+      )
       isLeftSelecting = false
       clearSelectionPreview(chartKey)
 
-      // Left-drag box zoom on x-axis.
-      if (delta >= 5 && rect.width > 0) {
-        const minX = Math.min(selectStartX, endX)
-        const maxX = Math.max(selectStartX, endX)
-        const start = (minX / rect.width) * 100
-        const end = (maxX / rect.width) * 100
-        applyDataZoom(start, end)
+      if (!normalizedBox || normalizedBox.width < 5) {
+        return
+      }
+
+      try {
+        const startTime = normalizePixelTimeValue(
+          chart.convertFromPixel({ xAxisIndex: 0 }, normalizedBox.left),
+        )
+        const endTime = normalizePixelTimeValue(
+          chart.convertFromPixel(
+            { xAxisIndex: 0 },
+            normalizedBox.left + normalizedBox.width,
+          ),
+        )
+        if (startTime === null || endTime === null) {
+          return
+        }
+
+        const start = timeValueToPercent(
+          Math.min(startTime, endTime),
+          timeRange,
+        )
+        const end = timeValueToPercent(Math.max(startTime, endTime), timeRange)
+
+        if (end - start >= 0.01) {
+          applyDataZoom(start, end)
+        }
+      } catch {
+        chartRegistryRef.current.delete(chartKey)
+        chartCleanupRef.current.delete(chartKey)
       }
     }
 
     const onMouseDown = (event: MouseEvent) => {
+      activeTimelineChartKeyRef.current = chartKey
       if (event.button === 0) {
         const rect = dom.getBoundingClientRect()
         selectStartX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width)
@@ -687,10 +1128,30 @@ function App() {
     }
 
     const onMouseMove = (event: MouseEvent) => {
+      activeTimelineChartKeyRef.current = chartKey
       if (isLeftSelecting) {
         event.preventDefault()
         updateSelectionPreview(event.clientX, event.clientY)
       }
+
+      if (isGlobalChartSyncEnabledRef.current) {
+        const rect = dom.getBoundingClientRect()
+        if (rect.width > 0) {
+          const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width)
+          try {
+            const timeValue = normalizePixelTimeValue(
+              chart.convertFromPixel({ xAxisIndex: 0 }, x),
+            )
+            if (timeValue !== null) {
+              syncChartCursor(chartKey, timeValue)
+            }
+          } catch {
+            chartRegistryRef.current.delete(chartKey)
+            chartCleanupRef.current.delete(chartKey)
+          }
+        }
+      }
+
       if (!isMiddleDragging) return
       const rect = dom.getBoundingClientRect()
       if (rect.width <= 0) return
@@ -726,7 +1187,7 @@ function App() {
 
     const onMouseUp = (event: MouseEvent) => {
       if (event.button === 0) {
-        finishLeftSelection(event.clientX)
+        finishLeftSelection(event.clientX, event.clientY)
         return
       }
 
@@ -738,6 +1199,7 @@ function App() {
       if (isLeftSelecting) {
         clearSelectionPreview(chartKey)
       }
+      clearSyncedChartCursor(chartKey)
       isMiddleDragging = false
     }
 
@@ -749,7 +1211,7 @@ function App() {
 
     const onWindowMouseUp = (event: MouseEvent) => {
       if (event.button === 0) {
-        finishLeftSelection(event.clientX)
+        finishLeftSelection(event.clientX, event.clientY)
       } else if (event.button === 1) {
         isMiddleDragging = false
       }
@@ -757,9 +1219,21 @@ function App() {
 
     const onDataZoom = () => {
       if (isSyncingZoomRef.current || isChartDisposed(chart)) return
+      activeTimelineChartKeyRef.current = chartKey
       const zoomState = chart.getOption()?.dataZoom?.[0]
       const start = Number(zoomState?.start ?? 0)
       const end = Number(zoomState?.end ?? 100)
+      if (rangeGroupKey) {
+        const startTime = percentToTimeValue(start, timeRange)
+        const endTime = percentToTimeValue(end, timeRange)
+        setControlQualityLinkedRanges((current) => ({
+          ...current,
+          [rangeGroupKey]: {
+            startS: Math.min(startTime, endTime),
+            endS: Math.max(startTime, endTime),
+          },
+        }))
+      }
       syncChartZoom(chartKey, start, end)
     }
 
@@ -790,7 +1264,13 @@ function App() {
     }
 
     chartCleanupRef.current.set(chartKey, cleanup)
-  }, [clearSelectionPreview, syncChartZoom])
+  }, [
+    clearSelectionPreview,
+    clearSyncedChartCursor,
+    showTimelineCursor,
+    syncChartCursor,
+    syncChartZoom,
+  ])
 
   const handleChartDispose = useCallback((chartKey: string) => {
     const cleanup = chartCleanupRef.current.get(chartKey)
@@ -799,11 +1279,25 @@ function App() {
     }
     chartCleanupRef.current.delete(chartKey)
     chartRegistryRef.current.delete(chartKey)
+    if (activeTimelineChartKeyRef.current === chartKey) {
+      activeTimelineChartKeyRef.current = null
+    }
   }, [])
 
   useEffect(() => {
     return cleanupChartInteractions
   }, [cleanupChartInteractions])
+
+  const controlAnalysisHasReports = controlAnalysisReports.length > 0
+  const controlAnalysisStatusLabel = isControlAnalysisUploading
+    ? '分析中'
+    : controlAnalysisHasReports
+      ? controlAnalysisReports.some((item) => item.errorText)
+        ? '部分完成'
+        : '分析完成'
+      : controlAnalysisFiles.length > 0
+        ? `已选择 ${controlAnalysisFiles.length} 份`
+        : '等待日志'
 
   return (
     <div className="app">
@@ -882,6 +1376,20 @@ function App() {
               <div className="actions">
                 <button
                   type="button"
+                  className={`button chart-sync-button${
+                    isGlobalChartSyncEnabled ? ' chart-sync-button-active' : ''
+                  }`}
+                  onClick={() =>
+                    setIsGlobalChartSyncEnabled((current) => !current)
+                  }
+                  aria-pressed={isGlobalChartSyncEnabled}
+                >
+                  {isGlobalChartSyncEnabled
+                    ? '\u5168\u5c40\u56fe\u8868\u8054\u52a8\uff1a\u5df2\u5f00\u542f'
+                    : '\u5f00\u542f\u5168\u5c40\u56fe\u8868\u8054\u52a8'}
+                </button>
+                <button
+                  type="button"
                   className="button"
                   onClick={handleBackToLogUpload}
                 >
@@ -917,10 +1425,17 @@ function App() {
               modeSegments={modeSegments}
               diagnostics={diagnostics}
               selectionBox={selectionBox}
+              timelinePointer={timelinePointer}
+              isTimelinePlaying={isTimelinePlaying}
               chartHint={chartHint}
               showDefaultSeriesFallback
               onChartReady={bindChartInteractions}
               onChartDispose={handleChartDispose}
+              onTimelineSeek={(timeValue) => {
+                setIsTimelinePlaying(false)
+                setTimelineTime(timeValue)
+              }}
+              onToggleTimelinePlayback={toggleTimelinePlayback}
             />
           </section>
         ) : null}
@@ -947,59 +1462,139 @@ function App() {
               <div>
                 <h2>{'\u529f\u80fd 3\uff1a\u63a7\u5236\u73af\u8def\u5206\u6790'}</h2>
                 <p className="hint">
-                  {'\u6309\u6587\u6863\u8981\u6c42\u4ece\u5185\u73af\u5230\u5916\u73af\u4f9d\u6b21\u5c55\u793a\u5f53\u524d\u65e5\u5fd7\u7684\u63a7\u5236\u8ddf\u968f\u66f2\u7ebf\u4e0e\u6307\u6807\u3002'}
+                  {'\u4ece\u5185\u73af\u5230\u5916\u73af\u5c55\u793a\u63a7\u5236\u8ddf\u968f\u66f2\u7ebf\u4e0e\u6307\u6807\uff1b\u652f\u6301\u591a\u65e5\u5fd7\u6309\u5217\u5bf9\u6bd4\u3002'}
                 </p>
               </div>
-              <button
-                type="button"
-                className="button"
-                onClick={handleBackToHome}
-              >
-                {'\u8fd4\u56de\u529f\u80fd\u5217\u8868'}
-              </button>
+              <div className="actions control-quality-page-actions">
+                <button
+                  type="button"
+                  className={`button chart-sync-button${
+                    isGlobalChartSyncEnabled ? ' chart-sync-button-active' : ''
+                  }`}
+                  onClick={() =>
+                    setIsGlobalChartSyncEnabled((current) => !current)
+                  }
+                  aria-pressed={isGlobalChartSyncEnabled}
+                >
+                  {isGlobalChartSyncEnabled
+                    ? '\u5168\u5c40\u56fe\u8868\u8054\u52a8\uff1a\u5df2\u5f00\u542f'
+                    : '\u5f00\u542f\u5168\u5c40\u56fe\u8868\u8054\u52a8'}
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={handleBackToHome}
+                >
+                  {'\u8fd4\u56de\u529f\u80fd\u5217\u8868'}
+                </button>
+              </div>
             </div>
             <input
               ref={controlAnalysisFileInputRef}
               type="file"
               className="hidden-input"
               accept=".ulg"
+              multiple
               onChange={handleControlAnalysisFileChange}
             />
-            <div className="actions">
-              <button
-                type="button"
-                className="button"
-                onClick={handleChooseControlAnalysisFile}
+            <div className="control-analysis-toolbar">
+              <div className="actions control-analysis-actions">
+                <button
+                  type="button"
+                  className="button"
+                  onClick={handleChooseControlAnalysisFile}
+                >
+                  {'\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6'}
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={handleUploadControlAnalysisLog}
+                  disabled={isControlAnalysisUploading || controlAnalysisFiles.length === 0}
+                >
+                  {isControlAnalysisUploading
+                    ? '\u4e0a\u4f20\u4e2d...'
+                    : '\u4e0a\u4f20\u5e76\u5bf9\u6bd4\u65e5\u5fd7'}
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => {
+                    setControlAnalysisFiles([])
+                    setControlAnalysisReports([])
+                    setControlQualityLinkedRanges({})
+                    setControlAnalysisStatusText('')
+                  }}
+                  disabled={isControlAnalysisUploading || controlAnalysisFiles.length === 0}
+                >
+                  {'\u6e05\u7a7a\u5df2\u9009\u65e5\u5fd7'}
+                </button>
+              </div>
+              <span
+                className={`control-analysis-status control-analysis-status-${
+                  controlAnalysisHasReports ? 'done' : 'idle'
+                }`}
               >
-                {'\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6'}
-              </button>
-              <button
-                type="button"
-                className="button"
-                onClick={handleUploadControlAnalysisLog}
-                disabled={isControlAnalysisUploading}
-              >
-                {isControlAnalysisUploading
-                  ? '\u4e0a\u4f20\u4e2d...'
-                  : '\u4e0a\u4f20\u65e5\u5fd7\u6587\u4ef6'}
-              </button>
+                {controlAnalysisStatusLabel}
+              </span>
             </div>
-            {controlAnalysisFileName ? (
-              <p className="hint">
-                {'\u5df2\u9009\u6587\u4ef6\uff1a'}
-                {controlAnalysisFileName}
-              </p>
+            {controlAnalysisFiles.length > 0 && !controlAnalysisHasReports ? (
+              <div className="control-compare-selected">
+                <p className="hint">
+                  {`\u5df2\u9009 ${controlAnalysisFiles.length} \u4efd\u6587\u4ef6\uff1a`}
+                </p>
+                <ul className="batch-list">
+                  {controlAnalysisFiles.map((file, index) => (
+                    <li key={`${getFileSelectionKey(file)}-${index}`}>
+                      {file.name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ) : null}
             {controlAnalysisStatusText ? (
-              <p className="hint">{controlAnalysisStatusText}</p>
+              <p className="hint control-analysis-status-text">
+                {controlAnalysisStatusText}
+              </p>
             ) : null}
-            <ControlQualityPanel
-              report={controlQualityReport}
-              isLoading={isControlQualityLoading}
-              errorText={controlQualityError}
-              onApplyRange={handleApplyControlQualityRange}
-              onExportCsv={handleExportControlQualityCsv}
-            />
+            {controlAnalysisReports.length > 0 ? (
+              <div className="control-compare-grid">
+                {controlAnalysisReports.map((item) => (
+                  <article className="control-compare-column" key={item.clientId}>
+                    <div className="control-compare-column-head">
+                      <h3>{item.fileName}</h3>
+                      {item.logId ? (
+                        <details className="control-log-details">
+                          <summary>详情</summary>
+                          <p className="hint">{`logId: ${item.logId}`}</p>
+                        </details>
+                      ) : null}
+                    </div>
+                    <ControlQualityPanel
+                      chartKeyPrefix={`control-quality__${item.clientId}`}
+                      report={item.report}
+                      rangeGroupKey={item.clientId}
+                      selectionBox={selectionBox}
+                      timelinePointer={timelinePointer}
+                      isTimelinePlaying={isTimelinePlaying}
+                      linkedRange={controlQualityLinkedRanges[item.clientId]}
+                      isLoading={item.isLoading}
+                      errorText={item.errorText}
+                      onChartReady={bindChartInteractions}
+                      onChartDispose={handleChartDispose}
+                      onTimelineSeek={(timeValue) => {
+                        setIsTimelinePlaying(false)
+                        setTimelineTime(timeValue)
+                      }}
+                      onToggleTimelinePlayback={toggleTimelinePlayback}
+                      onApplyRange={(startS, endS) =>
+                        handleApplyControlQualityRange(item, startS, endS)
+                      }
+                    />
+                  </article>
+                ))}
+              </div>
+            ) : null}
           </section>
         ) : null}
       </main>

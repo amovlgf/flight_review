@@ -439,18 +439,23 @@ function computeLoop(topicCharts, loopName, segment, missingFields) {
       segment,
       wrapError: mapping.wrap === true,
     });
+    const chartAligned = alignSeries({
+      setpointSeries: spMatch.series,
+      feedbackSeries: fbMatch.series,
+      wrapError: mapping.wrap === true,
+    });
     const result = computeTrackingMetrics(aligned, topicNames.maxDelayS);
     axis[axisName] = {
       status: result.status,
       unit: mapping.unit,
       metrics: result.metrics,
     };
-    if (aligned.status === 'available') {
+    if (chartAligned.status === 'available') {
       charts.push({
         axis: axisName,
         unit: mapping.unit,
-        setpointFeedback: aligned.points,
-        error: aligned.errorPoints,
+        setpointFeedback: chartAligned.points,
+        error: chartAligned.errorPoints,
       });
     }
   }
@@ -498,6 +503,13 @@ function computeActuator(topicCharts, segment) {
 
   const startS = isFiniteNumber(segment?.startS) ? segment.startS : -Infinity;
   const endS = isFiniteNumber(segment?.endS) ? segment.endS : Infinity;
+  const chart = (topic.series || [])
+    .filter(isActuatorSeries)
+    .map((series) => ({
+      name: series.name,
+      points: normalizePoints(series.points),
+    }))
+    .filter((series) => series.points.length > 0);
   const channels = (topic.series || [])
     .filter(isActuatorSeries)
     .map((series) => {
@@ -528,7 +540,7 @@ function computeActuator(topicCharts, segment) {
       status: 'not_enough_data',
       metrics: {},
       channels: [],
-      chart: [],
+      chart,
       notes: ['执行器 topic 存在，但当前区间没有可用输出通道。'],
     };
   }
@@ -559,14 +571,7 @@ function computeActuator(topicCharts, segment) {
     status: 'available',
     metrics,
     channels,
-    chart: (topic.series || [])
-      .filter(isActuatorSeries)
-      .map((series) => ({
-        name: series.name,
-        points: normalizePoints(series.points).filter(
-          (point) => point[0] >= startS && point[0] <= endS,
-        ),
-      })),
+    chart,
     notes: [],
   };
 }
@@ -646,7 +651,11 @@ function resolveSegment(topicCharts, segment) {
 
 function buildHints(report) {
   const hints = [];
-  const positionXy = report.loops.position?.axis?.xy?.metrics;
+  const positionAxes = ['x', 'y'].map((axis) => report.loops.position?.axis?.[axis]?.metrics);
+  const positionNrmseValues = positionAxes
+    .map((metrics) => metrics?.nrmse)
+    .filter(isFiniteNumber);
+  const positionNrmse = mean(positionNrmseValues);
   const velocityAxes = ['vx', 'vy'].map((axis) => report.loops.velocity?.axis?.[axis]?.metrics);
   const velocityNrmseValues = velocityAxes
     .map((metrics) => metrics?.nrmse)
@@ -654,9 +663,9 @@ function buildHints(report) {
   const velocityNrmse = mean(velocityNrmseValues);
 
   if (
-    isFiniteNumber(positionXy?.nrmse) &&
+    isFiniteNumber(positionNrmse) &&
     isFiniteNumber(velocityNrmse) &&
-    positionXy.nrmse > velocityNrmse * 1.5
+    positionNrmse > velocityNrmse * 1.5
   ) {
     hints.push(
       '位置跟踪误差相对更明显，建议检查位置期望值是否平滑，以及本地位置反馈是否存在跳变。',
@@ -690,27 +699,6 @@ function buildHints(report) {
   return hints;
 }
 
-function addPositionXy(loop) {
-  const x = loop.axis?.x;
-  const y = loop.axis?.y;
-  if (!x || !y || x.status !== 'available' || y.status !== 'available') return;
-  const xMetrics = x.metrics || {};
-  const yMetrics = y.metrics || {};
-  const rmse = Math.sqrt((xMetrics.rmse || 0) ** 2 + (yMetrics.rmse || 0) ** 2);
-  const maxError = Math.sqrt((xMetrics.max_error || 0) ** 2 + (yMetrics.max_error || 0) ** 2);
-  const scale = Math.max(xMetrics.signal_scale || 0, yMetrics.signal_scale || 0, EPS);
-  loop.axis.xy = {
-    status: 'available',
-    unit: 'm',
-    metrics: {
-      rmse: roundMetric(rmse),
-      max_error: roundMetric(maxError),
-      nrmse: roundMetric(rmse / scale),
-      signal_scale: roundMetric(scale),
-    },
-  };
-}
-
 function buildControlQualityReport(stored, options = {}) {
   const topicCharts = Array.isArray(stored?.topicCharts) ? stored.topicCharts : [];
   const usedTopics = (stored?.usedTopics || []).map(String);
@@ -732,8 +720,6 @@ function buildControlQualityReport(stored, options = {}) {
     velocity: computeLoop(topicCharts, 'velocity', segment, missingFields),
     position: computeLoop(topicCharts, 'position', segment, missingFields),
   };
-
-  addPositionXy(loops.position);
 
   const estimatorQuality = computeEstimatorQuality(topicCharts, segment);
   const availableLoops = LOOP_ORDER.filter((loopName) => loops[loopName]?.status === 'available');

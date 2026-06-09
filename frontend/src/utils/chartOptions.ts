@@ -205,7 +205,7 @@ export function buildTopicChartOption(
   const minModeLabelDuration = Math.max(5, chartTimeRange * 0.08)
 
   return {
-    backgroundColor: '#f7f9fc',
+    backgroundColor: '#ffffff',
     color: DEFAULT_CHART_COLORS,
     tooltip: { trigger: 'axis' },
     toolbox: {
@@ -271,13 +271,7 @@ export function buildTopicChartOption(
         type: 'inside',
         xAxisIndex: 0,
         filterMode: 'none',
-      },
-      {
-        type: 'slider',
-        xAxisIndex: 0,
-        filterMode: 'none',
-        bottom: 16,
-        height: 18,
+        moveOnMouseMove: false,
       },
     ],
     series: normalizedSeries.map((item, idx) => {

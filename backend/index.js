@@ -278,6 +278,72 @@ app.post('/api/logs/control-quality', (req, res) => {
   return res.json(report);
 });
 
+app.post('/api/logs/control-quality/batch', upload.array('logFiles'), (req, res) => {
+  const files = Array.isArray(req.files) ? req.files : [];
+
+  if (files.length === 0) {
+    return res.status(400).json({
+      message: 'No files uploaded.',
+      reports: [],
+      failedLogs: [],
+      total: 0,
+      successCount: 0,
+      failedCount: 0,
+    });
+  }
+
+  const reports = [];
+  const failedLogs = [];
+
+  for (const file of files) {
+    const safeOriginalName = decodeUploadedFileName(file.originalname);
+    const extension = path.extname(safeOriginalName).toLowerCase();
+    let shouldRemoveTempFile = true;
+
+    try {
+      if (extension !== '.ulg') {
+        failedLogs.push({
+          fileName: safeOriginalName,
+          reason: 'Only .ulg files are supported now.',
+        });
+        continue;
+      }
+
+      const parsedLog = buildParsedLog(file.path, safeOriginalName);
+      parsedLogStore.set(parsedLog.logId, parsedLog);
+      shouldRemoveTempFile = false;
+
+      ensureStoredLogParsed(parsedLog);
+      const report = buildControlQualityReport(parsedLog);
+
+      reports.push({
+        logId: parsedLog.logId,
+        fileName: parsedLog.fileName,
+        uploadedAt: parsedLog.uploadedAt,
+        metadata: parsedLog.metadata,
+        report,
+      });
+    } catch (error) {
+      failedLogs.push({
+        fileName: safeOriginalName,
+        reason: resolveBatchFailureReason(error),
+      });
+    } finally {
+      if (shouldRemoveTempFile) {
+        removeUploadedTempFile(file.path);
+      }
+    }
+  }
+
+  return res.json({
+    reports,
+    failedLogs,
+    total: files.length,
+    successCount: reports.length,
+    failedCount: failedLogs.length,
+  });
+});
+
 app.post('/api/tuning/metrics', (req, res) => {
   const logId = typeof req.body?.logId === 'string' ? req.body.logId.trim() : '';
   const axis = typeof req.body?.axis === 'string' ? req.body.axis.trim() : '';

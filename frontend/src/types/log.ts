@@ -96,6 +96,22 @@ export type BatchAnalyzeLogsResponse = {
   failedCount: number
 }
 
+export type BatchControlQualityReportItem = {
+  logId: string
+  fileName: string
+  uploadedAt: string
+  metadata: LogMetadata
+  report: ControlQualityReport
+}
+
+export type BatchControlQualityResponse = {
+  reports: BatchControlQualityReportItem[]
+  failedLogs: BatchAnalyzeFailedLog[]
+  total: number
+  successCount: number
+  failedCount: number
+}
+
 export type LogListResponse = {
   total: number
   page: number
@@ -131,6 +147,10 @@ export type ControlQualityLoop = {
   axis?: Record<string, ControlQualityAxis>
   metrics?: ControlQualityMetrics
   channels?: Array<Record<string, number | string | null>>
+  chart?: Array<{
+    name: string
+    points: ChartPoint[]
+  }>
   charts?: Array<{
     axis: string
     unit: string
