@@ -4,6 +4,7 @@ import './App.css'
 import BatchLogUpload from './components/BatchLogUpload'
 import ChartPanel from './components/ChartPanel'
 import ControlQualityPanel from './components/ControlQualityPanel'
+import IncidentAnalysisPanel from './components/IncidentAnalysisPanel'
 import type {
   ActiveLogMeta,
   ChartSelectionPreview,
@@ -20,9 +21,14 @@ import {
   calculateControlQuality,
   fetchChartData,
   fetchLogList,
+  runIncidentAnalysis,
   uploadLogFile,
 } from './services/api'
-import type { ControlQualityReport } from './types/log'
+import type {
+  ControlQualityReport,
+  IncidentAnalysisResponse,
+  IncidentTimelineEvent,
+} from './types/log'
 import {
   isValidSelectionBox,
   normalizeSelectionBox,
@@ -79,6 +85,34 @@ type ControlAnalysisReportItem = {
   errorText: string
 }
 
+type IncidentEvidenceFocus = {
+  eventId: string
+  chartTopic: string
+  seriesName: string
+  label: string
+  startS: number
+  endS: number
+  targetTimeS: number
+}
+
+function mapIncidentChartGroupsToTopicCharts(
+  report: IncidentAnalysisResponse,
+): TopicChart[] {
+  return Array.isArray(report.chartGroups)
+    ? report.chartGroups.map((group) => ({
+        topic: group.id,
+        title: group.title,
+        series: Array.isArray(group.series)
+          ? group.series.map((item) => ({
+              name: item.label || item.id,
+              unit: item.unit || '',
+              points: item.points,
+            }))
+          : [],
+      }))
+    : []
+}
+
 const PAGE_SIZE = 8
 const TIMELINE_PLAYBACK_SPEED = 1
 const TIMELINE_FINE_STEP_MIN_S = 0.05
@@ -102,6 +136,16 @@ function timeValueToPercent(value: number, timeRange: ChartTimeRange) {
   const span = timeRange.end - timeRange.start
   if (span <= 0) return 0
   return clampPercent(((value - timeRange.start) / span) * 100)
+}
+
+function findChartWrapElementByTopic(topic: string) {
+  if (!topic || typeof document === 'undefined') return null
+
+  return (
+    Array.from(document.querySelectorAll<HTMLElement>('.chart-wrap[data-topic]')).find(
+      (item) => item.dataset.topic === topic,
+    ) ?? null
+  )
 }
 
 function normalizePixelTimeValue(value: number | number[]) {
@@ -154,6 +198,13 @@ function App() {
   const [topicCharts, setTopicCharts] = useState<TopicChart[]>([])
   const [modeSegments, setModeSegments] = useState<ModeSegment[]>([])
   const [diagnostics, setDiagnostics] = useState<DiagnosticItem[]>([])
+  const [incidentAnalysisReport, setIncidentAnalysisReport] =
+    useState<IncidentAnalysisResponse | null>(null)
+  const [isIncidentAnalysisLoading, setIsIncidentAnalysisLoading] =
+    useState(false)
+  const [incidentAnalysisError, setIncidentAnalysisError] = useState('')
+  const [incidentEvidenceFocus, setIncidentEvidenceFocus] =
+    useState<IncidentEvidenceFocus | null>(null)
   const [logList, setLogList] = useState<
     Array<{ logId: string; fileName: string; uploadedAt: string }>
   >([])
@@ -283,6 +334,9 @@ function App() {
       setTopicCharts([])
       setModeSegments([])
       setDiagnostics([])
+      setIncidentAnalysisReport(null)
+      setIncidentAnalysisError('')
+      setIncidentEvidenceFocus(null)
       setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
       setActiveLogMeta(null)
       setSelectionBox(null)
@@ -309,6 +363,9 @@ function App() {
       setTopicCharts([])
       setModeSegments([])
       setDiagnostics([])
+      setIncidentAnalysisReport(null)
+      setIncidentAnalysisError('')
+      setIncidentEvidenceFocus(null)
       setActiveLogMeta(null)
       setSelectionBox(null)
       setStatusText('\u4e0a\u4f20\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u540e\u7aef\u662f\u5426\u542f\u52a8\u3002')
@@ -538,10 +595,38 @@ function App() {
       setModeSegments([])
       setActiveLogMeta(null)
       setSelectionBox(null)
+      setIncidentEvidenceFocus(null)
       void loadLogList({ preferLogId: '' })
       setChartHint(
         '\u56fe\u8868\u6570\u636e\u8bf7\u6c42\u5931\u8d25\uff08\u53ef\u80fd\u662f\u65e5\u5fd7\u5df2\u5931\u6548\uff0c\u8bf7\u5237\u65b0\u5217\u8868\u6216\u91cd\u65b0\u4e0a\u4f20\uff09',
       )
+    }
+  }
+
+  const handleRunIncidentAnalysis = async () => {
+    if (!selectedLogId) return
+
+    try {
+      setIsIncidentAnalysisLoading(true)
+      setIncidentAnalysisError('')
+      setIncidentEvidenceFocus(null)
+      const report = await runIncidentAnalysis(selectedLogId)
+      setIncidentAnalysisReport(report)
+      const incidentTopicCharts = mapIncidentChartGroupsToTopicCharts(report)
+      if (incidentTopicCharts.length > 0) {
+        setTopicCharts(incidentTopicCharts)
+        setSeriesData([])
+        setDiagnostics([])
+        setChartHint('已加载 V1.3 事件证据图表。')
+      }
+    } catch {
+      setIncidentAnalysisReport(null)
+      setIncidentEvidenceFocus(null)
+      setIncidentAnalysisError(
+        '\u65e5\u5fd7 V1.3 \u5206\u6790\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u5df2\u542f\u52a8\u4e14\u65e5\u5fd7\u4ecd\u5728\u5f53\u524d\u4f1a\u8bdd\u4e2d\u3002',
+      )
+    } finally {
+      setIsIncidentAnalysisLoading(false)
     }
   }
 
@@ -552,6 +637,9 @@ function App() {
     setTopicCharts([])
     setModeSegments([])
     setDiagnostics([])
+    setIncidentAnalysisReport(null)
+    setIncidentAnalysisError('')
+    setIncidentEvidenceFocus(null)
     setActiveLogMeta(null)
     setSelectionBox(null)
     if (logId) {
@@ -578,6 +666,9 @@ function App() {
     await loadLogList({ page: 1, keyword: searchKeyword })
     setSeriesData([])
     setDiagnostics([])
+    setIncidentAnalysisReport(null)
+    setIncidentAnalysisError('')
+    setIncidentEvidenceFocus(null)
     setActiveLogMeta(null)
     setChartHint('\u65e5\u5fd7\u5217\u8868\u5df2\u66f4\u65b0\uff0c\u8bf7\u9009\u62e9\u65e5\u5fd7\u540e\u67e5\u770b\u56fe\u8868\u3002')
   }
@@ -731,6 +822,123 @@ function App() {
 
     return nextTime
   }, [getTimelineBounds, hideTimelineCursor, showTimelineCursor])
+
+  const findMatchingChartTopic = useCallback((chartTopic: string, chartGroupId?: string) => {
+    if (chartGroupId) {
+      const groupMatch = topicCharts.find((item) => item.topic === chartGroupId)
+      if (groupMatch) return groupMatch.topic
+    }
+
+    if (!chartTopic) return ''
+
+    const exactMatch = topicCharts.find((item) => item.topic === chartTopic)
+    if (exactMatch) return exactMatch.topic
+
+    const prefixedMatch = topicCharts.find(
+      (item) =>
+        item.topic.startsWith(`${chartTopic}_`) ||
+        chartTopic.startsWith(`${item.topic}_`),
+    )
+
+    return prefixedMatch?.topic ?? chartTopic
+  }, [topicCharts])
+
+  const zoomChartsToTimeWindow = useCallback((startS: number, endS: number) => {
+    const safeStartS = Math.min(startS, endS)
+    const safeEndS = Math.max(startS, endS)
+
+    chartRegistryRef.current.forEach((item, chartKey) => {
+      if (isChartDisposed(item.chart)) {
+        chartRegistryRef.current.delete(chartKey)
+        chartCleanupRef.current.delete(chartKey)
+        return
+      }
+
+      const start = timeValueToPercent(safeStartS, item.timeRange)
+      const end = timeValueToPercent(safeEndS, item.timeRange)
+
+      try {
+        item.chart.dispatchAction({
+          type: 'dataZoom',
+          dataZoomIndex: 0,
+          start,
+          end,
+        })
+      } catch {
+        chartRegistryRef.current.delete(chartKey)
+        chartCleanupRef.current.delete(chartKey)
+      }
+    })
+  }, [])
+
+  const scrollIncidentEvidenceIntoView = useCallback((
+    focus: IncidentEvidenceFocus,
+  ) => {
+    const targetEntry = Array.from(chartRegistryRef.current.entries()).find(
+      ([chartKey]) => chartKey.startsWith(`${focus.chartTopic}__`),
+    )
+    const registryElement = targetEntry?.[1]?.chart.getDom()?.closest('.chart-wrap')
+    const targetElement =
+      registryElement instanceof HTMLElement
+        ? registryElement
+        : findChartWrapElementByTopic(focus.chartTopic)
+
+    targetElement?.scrollIntoView({ behavior: 'auto', block: 'start' })
+  }, [])
+
+  const applyIncidentEvidenceFocus = useCallback((
+    focus: IncidentEvidenceFocus,
+  ) => {
+    zoomChartsToTimeWindow(focus.startS, focus.endS)
+    setTimelineTime(focus.targetTimeS)
+    scrollIncidentEvidenceIntoView(focus)
+  }, [scrollIncidentEvidenceIntoView, setTimelineTime, zoomChartsToTimeWindow])
+
+  const focusIncidentTimelineEvent = useCallback((event: IncidentTimelineEvent) => {
+    const link = event.evidenceLinks?.[0]
+    if (!link) {
+      setIncidentEvidenceFocus(null)
+      return
+    }
+
+    const startS = link.timeWindow?.startS ?? Math.max(0, event.timeS - 3)
+    const endS = link.timeWindow?.endS ?? event.timeS + 5
+    const chartTopic = findMatchingChartTopic(
+      link.chartTopic || link.source.topic,
+      link.chartGroupId,
+    )
+    const seriesName = link.seriesId || link.standardSignal || link.source.field
+    const targetTimeS = link.targetTimeS ?? event.timeS
+    const nextFocus = {
+      eventId: event.id,
+      chartTopic,
+      seriesName,
+      label: `${event.code} / ${link.standardSignal}`,
+      startS,
+      endS,
+      targetTimeS,
+    }
+
+    setIsTimelinePlaying(false)
+    setIncidentEvidenceFocus(nextFocus)
+    window.setTimeout(() => scrollIncidentEvidenceIntoView(nextFocus), 0)
+  }, [findMatchingChartTopic, scrollIncidentEvidenceIntoView])
+
+  useEffect(() => {
+    if (!incidentEvidenceFocus) {
+      return undefined
+    }
+
+    const timerIds = [0, 40, 100, 180, 300, 500, 760].map((delay) =>
+      window.setTimeout(() => {
+        applyIncidentEvidenceFocus(incidentEvidenceFocus)
+      }, delay),
+    )
+
+    return () => {
+      timerIds.forEach((timerId) => window.clearTimeout(timerId))
+    }
+  }, [applyIncidentEvidenceFocus, incidentEvidenceFocus])
 
   const moveTimelinePointer = useCallback((
     direction: -1 | 1,
@@ -1418,6 +1626,15 @@ function App() {
               onPrevPage={handlePrevPage}
               onNextPage={handleNextPage}
             />
+            <IncidentAnalysisPanel
+              selectedLogId={selectedLogId}
+              report={incidentAnalysisReport}
+              isLoading={isIncidentAnalysisLoading}
+              errorText={incidentAnalysisError}
+              onRun={handleRunIncidentAnalysis}
+              modeSegments={modeSegments}
+              onEventFocus={focusIncidentTimelineEvent}
+            />
             <ChartPanel
               activeLogMeta={activeLogMeta}
               topicCharts={topicCharts}
@@ -1427,6 +1644,13 @@ function App() {
               selectionBox={selectionBox}
               timelinePointer={timelinePointer}
               isTimelinePlaying={isTimelinePlaying}
+              activeChartTopic={incidentEvidenceFocus?.chartTopic}
+              activeSeriesName={incidentEvidenceFocus?.seriesName}
+              activeChartBadgeLabel={
+                incidentEvidenceFocus
+                  ? `${incidentEvidenceFocus.label} @ ${incidentEvidenceFocus.targetTimeS.toFixed(2)}s`
+                  : undefined
+              }
               chartHint={chartHint}
               showDefaultSeriesFallback
               onChartReady={bindChartInteractions}

@@ -147,4 +147,32 @@ describe('chartOptions', () => {
     expect(() => buildTopicChartOption(topicChart, [])).not.toThrow()
     expect(getChartTimeRange(topicChart)).toBeCloseTo((points.length - 1) * 0.01)
   })
+
+  it('renders discrete evidence state signals as visible stepped lines', () => {
+    const topicChart: TopicChart = {
+      topic: 'v1_3_state_signals',
+      title: 'V1.3 state evidence signals',
+      series: [
+        {
+          name: 'takeoff.state',
+          unit: '',
+          points: [
+            [66.44, 3],
+            [66.45, 5],
+          ],
+        },
+      ],
+    }
+
+    const option = buildTopicChartOption(topicChart, [])
+
+    expect(option.series[0]).toMatchObject({
+      name: 'takeoff.state ()',
+      type: 'line',
+      step: 'end',
+      showSymbol: true,
+      symbol: 'circle',
+    })
+    expect(option.series[0]?.lineStyle.width).toBeGreaterThanOrEqual(2.8)
+  })
 })

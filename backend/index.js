@@ -8,6 +8,7 @@ const {
   buildParsedLog,
   ensureStoredLogParsed,
 } = require('./services/logParserService');
+const { buildIncidentAnalysisV13 } = require('./services/incidentAnalysisService');
 const { hasUnlockedFlight } = require('./services/unlockFlightService');
 const {
   buildControlQualityReport,
@@ -29,6 +30,51 @@ const {
 const app = express();
 const port = process.env.PORT || 3001;
 const parsedLogStore = new Map();
+const CHART_DATA_CONTRACT_VERSION = 'chart-data.v1.3';
+
+function buildEmptyChartMetadata() {
+  return {
+    fileSizeBytes: 0,
+    version: 0,
+    logStartTimestampUs: 0,
+  };
+}
+
+function buildChartDataResponse({
+  message,
+  code = 'OK',
+  dataSource = 'unavailable',
+  role,
+  logId = '',
+  fileName = '',
+  uploadedAt = '',
+  metadata = buildEmptyChartMetadata(),
+  topicCharts = [],
+  modeSegments = [],
+  diagnostics = [],
+}) {
+  const normalizedTopicCharts = Array.isArray(topicCharts) ? topicCharts : [];
+
+  return {
+    contractVersion: CHART_DATA_CONTRACT_VERSION,
+    message,
+    code,
+    dataSource,
+    role,
+    availableRoles: getAvailableRoles(),
+    logId,
+    fileName,
+    uploadedAt,
+    metadata,
+    usedTopics: normalizedTopicCharts.map((item) => item.topic),
+    modeSegments: Array.isArray(modeSegments) ? modeSegments : [],
+    series: normalizedTopicCharts.flatMap((item) =>
+      Array.isArray(item.series) ? item.series : [],
+    ),
+    topicCharts: normalizedTopicCharts,
+    diagnostics: Array.isArray(diagnostics) ? diagnostics : [],
+  };
+}
 
 function decodeUploadedFileName(fileName) {
   return Buffer.from(fileName, 'latin1').toString('utf8');
@@ -208,9 +254,52 @@ app.get('/api/logs/chart-data', (req, res) => {
   const roleRaw = typeof req.query.role === 'string' ? req.query.role : undefined;
   const role = resolveRole(roleRaw);
   if (!logId) {
+    return res.status(400).json(
+      buildChartDataResponse({
+        message: 'logId is required.',
+        code: 'LOG_ID_REQUIRED',
+        role,
+      }),
+    );
+  }
+
+  const stored = parsedLogStore.get(logId);
+  if (!stored) {
+    return res.status(404).json(
+      buildChartDataResponse({
+        message: 'Log not found. Please upload first.',
+        code: 'LOG_NOT_FOUND',
+        role,
+        logId,
+      }),
+    );
+  }
+
+  ensureStoredLogParsed(stored);
+
+  const filteredTopicCharts = filterTopicChartsByRole(stored.topicCharts, role);
+
+  res.json(buildChartDataResponse({
+    message: 'Chart data generated from uploaded ULG metadata.',
+    code: 'OK',
+    dataSource: stored.dataSource,
+    role,
+    logId,
+    fileName: stored.fileName,
+    uploadedAt: stored.uploadedAt,
+    metadata: stored.metadata,
+    modeSegments: Array.isArray(stored.modeSegments) ? stored.modeSegments : [],
+    topicCharts: filteredTopicCharts,
+    diagnostics: stored.diagnostics,
+  }));
+});
+
+app.post('/api/logs/:logId/incident-analysis', (req, res) => {
+  const logId = typeof req.params.logId === 'string' ? req.params.logId.trim() : '';
+  if (!logId) {
     return res.status(400).json({
       message: 'logId is required.',
-      series: [],
+      code: 'LOG_ID_REQUIRED',
     });
   }
 
@@ -218,30 +307,13 @@ app.get('/api/logs/chart-data', (req, res) => {
   if (!stored) {
     return res.status(404).json({
       message: 'Log not found. Please upload first.',
+      code: 'LOG_NOT_FOUND',
       logId,
-      series: [],
     });
   }
 
   ensureStoredLogParsed(stored);
-
-  const filteredTopicCharts = filterTopicChartsByRole(stored.topicCharts, role);
-
-  res.json({
-    message: 'Chart data generated from uploaded ULG metadata.',
-    dataSource: stored.dataSource,
-    role,
-    availableRoles: getAvailableRoles(),
-    logId,
-    fileName: stored.fileName,
-    uploadedAt: stored.uploadedAt,
-    metadata: stored.metadata,
-    usedTopics: filteredTopicCharts.map((item) => item.topic),
-    modeSegments: Array.isArray(stored.modeSegments) ? stored.modeSegments : [],
-    series: filteredTopicCharts.flatMap((item) => item.series),
-    topicCharts: filteredTopicCharts,
-    diagnostics: stored.diagnostics,
-  });
+  return res.json(buildIncidentAnalysisV13(stored));
 });
 
 app.post('/api/logs/control-quality', (req, res) => {

@@ -46,7 +46,9 @@ export type ChartDataSource =
   | (string & {})
 
 export type ChartDataResponse = {
+  contractVersion: 'chart-data.v1.3' | string
   message: string
+  code?: string
   dataSource: ChartDataSource
   role: string
   availableRoles: string[]
@@ -198,4 +200,289 @@ export type ControlQualityPayload = {
     source?: string
   }
   format?: 'json' | 'csv'
+}
+
+export type DataQualityLevel =
+  | 'complete'
+  | 'partial'
+  | 'insufficient'
+  | 'invalid'
+
+export type DataQualityRuleResult = {
+  code: string
+  level: DataQualityLevel
+  message: string
+}
+
+export type DataQualityReport = {
+  level: DataQualityLevel
+  rules: DataQualityRuleResult[]
+  parser: {
+    success: boolean
+    error: string | null
+  }
+}
+
+export type AnalysisCapability = {
+  timeline: boolean
+  phaseDetection: boolean
+  eventExtraction: boolean
+  attitudeAnalysis: boolean
+  rateAnalysis: boolean
+  actuatorAnalysis: boolean
+  batteryAnalysis: boolean
+  estimatorAnalysis: boolean
+  reasons: string[]
+}
+
+export type SignalMappingReportItem = {
+  standardSignal: string
+  status: 'mapped' | 'missing' | string
+  required: boolean
+  source: {
+    topic: string
+    instance: number
+    field: string
+    source: 'raw' | 'derived' | string
+  } | null
+  sampleCount: number
+  missingRatio: number
+}
+
+export type MissingSignal = {
+  id: string
+  required: boolean
+  reason: string
+}
+
+export type AnalysisWarning = {
+  code: string
+  level: 'info' | 'warning' | 'error' | string
+  message: string
+}
+
+export type IncidentFlightPhase = {
+  phase: string
+  startS: number
+  endS: number
+  source: string
+  confidence: 'high' | 'medium' | 'low' | 'confirmed' | 'derived' | string
+  evidenceCount?: number
+}
+
+export type IncidentEvidenceDetail = {
+  signal: string
+  message: string
+  value?: number | string | boolean | null
+  source_topic: string
+  source_field: string
+}
+
+export type IncidentRawEvent = {
+  kind: string
+  signal?: string
+  previous?: number | string | boolean | null
+  current?: number | string | boolean | null
+  previousLabel?: string
+  currentLabel?: string
+  stableDurationS?: number
+  changeCount?: number
+  changedFields?: string[]
+  [key: string]: unknown
+}
+
+export type IncidentChartHint = {
+  chartGroupId: string
+  seriesId: string
+  chartTopic: string
+  targetTimeS: number
+  timeWindow: {
+    startS: number
+    endS: number
+  }
+}
+
+export type IncidentTimelineEvent = {
+  id: string
+  code: string
+  type: string
+  timeS: number
+  severity: 'info' | 'warning' | 'error' | string
+  title: string
+  detail: string
+  description?: string
+  phase?: string
+  rawEvent?: IncidentRawEvent | null
+  confidence: 'high' | 'medium' | 'low' | 'confirmed' | 'derived' | string
+  evidence: string[]
+  evidenceDetails?: IncidentEvidenceDetail[]
+  source_topic?: string
+  source_field?: string
+  chart_hint?: IncidentChartHint | null
+  evidenceLinks?: IncidentEvidenceLink[]
+}
+
+export type IncidentEventGroup = {
+  id: string
+  phase:
+    | 'arming'
+    | 'takeoff'
+    | 'flight'
+    | 'flight_mode'
+    | 'landing'
+    | 'disarming'
+    | 'command'
+    | 'failsafe'
+    | 'flight_process'
+    | 'estimator'
+    | 'mission'
+    | 'unknown'
+    | string
+  severity: 'info' | 'notice' | 'warning' | 'critical' | string
+  startTimeS: number
+  endTimeS: number
+  title: string
+  summary: string
+  primaryEvents: IncidentTimelineEvent[]
+  evidenceEvents: IncidentTimelineEvent[]
+  rawEvents: IncidentTimelineEvent[]
+  evidenceSignals: string[]
+  evidenceLinks?: IncidentEvidenceLink[]
+  chartPreset:
+    | 'takeoffEvidence'
+    | 'landingEvidence'
+    | 'modeTimeline'
+    | 'commandAck'
+    | 'failsafeWindow'
+    | 'estimatorFlags'
+    | null
+    | string
+}
+
+export type IncidentEvidenceLink = {
+  id: string
+  eventId: string
+  standardSignal: string
+  chartGroupId: string
+  seriesId: string
+  chartTopic: string
+  targetTimeS: number
+  timeWindow: {
+    startS: number
+    endS: number
+  }
+  source: {
+    topic: string
+    instance: number
+    field: string
+  }
+}
+
+export type FlightProcessSourceRef = {
+  topic: string
+  instance: number
+  field: string
+} | null
+
+export type FlightProcessBooleanInterval = {
+  startS: number
+  endS: number
+}
+
+export type FlightProcessBooleanChange = {
+  timeS: number
+  active: boolean
+}
+
+export type FlightProcessLocalizationSource = {
+  id: string
+  label: string
+  signal: string
+  available: boolean
+  activeIntervals: FlightProcessBooleanInterval[]
+  changes: FlightProcessBooleanChange[]
+  source: FlightProcessSourceRef
+}
+
+export type FlightProcessFailsafeFlag = {
+  id: string
+  label: string
+  signal: string
+  value: number
+  source: FlightProcessSourceRef
+}
+
+export type FlightProcessFailsafeEvent = {
+  id: string
+  startS: number
+  endS: number | null
+  durationS: number | null
+  navState: string | null
+  navStateUserIntention: string | null
+  activeFlags: FlightProcessFailsafeFlag[]
+  source: FlightProcessSourceRef
+}
+
+export type FlightProcessPositionSeries = {
+  kind: 'setpoint' | 'actual' | 'vision' | string
+  label: string
+  signal: string
+  unit: string
+  points: ChartPoint[]
+  source: FlightProcessSourceRef
+}
+
+export type FlightProcessPositionAxis = {
+  axis: 'x' | 'y' | 'z' | string
+  label: string
+  unit: string
+  series: FlightProcessPositionSeries[]
+}
+
+export type FlightProcessMissingSignal = {
+  signal: string
+  label: string
+}
+
+export type FlightProcessReport = {
+  localizationSources: FlightProcessLocalizationSource[]
+  failsafeEvents: FlightProcessFailsafeEvent[]
+  positionComparison: FlightProcessPositionAxis[]
+  missingSignals: FlightProcessMissingSignal[]
+}
+
+export type IncidentAnalysisResponse = {
+  contractVersion: 'incident-analysis.v1.3' | 'incident-analysis.v1.2' | string
+  analysisId: string
+  logId: string
+  fileName: string
+  dataQuality: DataQualityReport
+  analysisCapability: AnalysisCapability
+  signalMappingReport: SignalMappingReportItem[]
+  flightSummary: {
+    durationS: number | null
+    armedFlightTimeS: number | null
+    unlockCount: number | null
+  }
+  phases: IncidentFlightPhase[]
+  timeline: IncidentTimelineEvent[]
+  eventGroups?: IncidentEventGroup[]
+  flightProcess?: FlightProcessReport
+  chartGroups: Array<{
+    id: string
+    title: string
+    series: Array<{
+      id: string
+      label: string
+      unit: string
+      points: ChartPoint[]
+      source: {
+        topic: string
+        instance: number
+        field: string
+      }
+    }>
+  }>
+  warnings: AnalysisWarning[]
+  missingSignals: MissingSignal[]
 }

@@ -387,3 +387,371 @@ type BatchControlQualityResponse = {
 Each comparison column renders one `ControlQualityReport`. Recalculating an
 analysis range or exporting CSV is scoped to that column's `logId` through the
 single-log `/api/logs/control-quality` endpoint.
+
+## POST /api/logs/:logId/incident-analysis
+
+V1.3 uses the separate incident-analysis entry point introduced in V1.1. It does not change
+`POST /api/logs/upload` or `GET /api/logs/chart-data`, and it does not use the
+fallback simulated chart data as accident evidence.
+
+### Request
+
+```http
+POST /api/logs/:logId/incident-analysis
+Content-Type: application/json
+```
+
+The V1.3 implementation accepts an empty JSON body. Future versions may use
+`segment`, `detectorProfile`, or AI review flags, but V1.3 does not run AI and
+does not return cause candidates.
+
+### Response
+
+```ts
+type IncidentAnalysisV13Response = {
+  contractVersion: 'incident-analysis.v1.3';
+  analysisId: string;
+  logId: string;
+  fileName: string;
+  dataQuality: DataQualityReport;
+  analysisCapability: AnalysisCapability;
+  signalMappingReport: SignalMappingReport[];
+  flightSummary: FlightSummary;
+  phases: IncidentFlightPhase[];
+  timeline: IncidentTimelineEvent[];
+  eventGroups?: IncidentEventGroup[];
+  flightProcess?: FlightProcessReport;
+  chartGroups: DiagnosticChartGroup[];
+  warnings: AnalysisWarning[];
+  missingSignals: MissingSignal[];
+};
+```
+
+V1.3 covers parsing, unified log time, standard signal availability, data
+quality, coarse flight phases, deterministic timeline events, warnings, and
+missing signals. It also adds evidence links so a frontend can jump from a
+timeline event to the relevant chart window. It still does not output root
+causes, hardware fault claims, or accident probabilities.
+
+```ts
+type IncidentFlightPhase = {
+  phase:
+    | 'ground_preflight'
+    | 'takeoff'
+    | 'airborne'
+    | 'landing'
+    | 'landed_postflight'
+    | 'ground'
+    | string;
+  startS: number;
+  endS: number;
+  source: string;
+  confidence: 'confirmed' | 'derived' | string;
+};
+
+type IncidentTimelineEvent = {
+  id: string;
+  code: string;
+  type: string;
+  timeS: number;
+  severity: 'info' | 'warning' | 'error' | string;
+  title: string;
+  detail: string;
+  confidence: 'confirmed' | 'derived' | string;
+  evidence: string[];
+  evidenceLinks: IncidentEvidenceLink[];
+};
+
+type IncidentEvidenceLink = {
+  id: string;
+  eventId: string;
+  standardSignal: string;
+  chartGroupId: string;
+  seriesId: string;
+  chartTopic: string;
+  targetTimeS: number;
+  timeWindow: {
+    startS: number;
+    endS: number;
+  };
+  source: {
+    topic: string;
+    instance: number;
+    field: string;
+  };
+};
+```
+
+`flightProcess` is the process-oriented layer for flight-state inspection. It
+does not replace `timeline` or `eventGroups`; it summarizes continuous
+localization source validity, failsafe trigger windows, and local/vision
+position comparison series.
+
+```ts
+type FlightProcessReport = {
+  localizationSources: Array<{
+    id: string;
+    label: string;
+    signal: string;
+    available: boolean;
+    activeIntervals: Array<{ startS: number; endS: number }>;
+    changes: Array<{ timeS: number; active: boolean }>;
+    source: { topic: string; instance: number; field: string } | null;
+  }>;
+  failsafeEvents: Array<{
+    id: string;
+    startS: number;
+    endS: number | null;
+    durationS: number | null;
+    navState: string | null;
+    navStateUserIntention: string | null;
+    activeFlags: Array<{
+      id: string;
+      label: string;
+      signal: string;
+      value: number;
+      source: { topic: string; instance: number; field: string } | null;
+    }>;
+    source: { topic: string; instance: number; field: string } | null;
+  }>;
+  positionComparison: Array<{
+    axis: 'x' | 'y' | 'z' | string;
+    label: string;
+    unit: 'm' | string;
+    series: Array<{
+      kind: 'setpoint' | 'actual' | 'vision' | string;
+      label: string;
+      signal: string;
+      unit: string;
+      points: Array<[number, number]>;
+      source: { topic: string; instance: number; field: string } | null;
+    }>;
+  }>;
+  missingSignals: Array<{ signal: string; label: string }>;
+};
+```
+
+Localization sources are primarily mapped from `estimator_status_flags`
+boolean control-status fields such as `cs_gnss_pos`, `cs_ev_pos`,
+`cs_opt_flow`, `cs_baro_hgt`, `cs_rng_hgt`, `cs_gps_hgt`, `cs_ev_hgt`, and
+`cs_ev_vel`. Failsafe events use `vehicle_status.failsafe` for trigger windows
+and add specific `failsafe_flags` fields when present. Position comparison uses
+`trajectory_setpoint` or `vehicle_local_position_setpoint` for setpoint,
+`vehicle_local_position` for actual local position, and
+`vehicle_visual_odometry` or `vehicle_odometry` for vision input.
+
+`eventGroups` is the compact deterministic-event layer. It keeps the original
+`timeline` intact for traceability while grouping nearby field changes into
+human-readable flight-process blocks. The frontend should prefer `eventGroups`
+for the timeline UI and fall back to `timeline` when the grouped field is
+unavailable.
+
+```ts
+type IncidentEventGroup = {
+  id: string;
+  phase:
+    | 'arming'
+    | 'takeoff'
+    | 'flight'
+    | 'flight_mode'
+    | 'landing'
+    | 'disarming'
+    | 'command'
+    | 'failsafe'
+    | 'estimator'
+    | 'mission'
+    | 'unknown'
+    | string;
+  severity: 'info' | 'notice' | 'warning' | 'critical' | string;
+  startTimeS: number;
+  endTimeS: number;
+  title: string;
+  summary: string;
+  primaryEvents: IncidentTimelineEvent[];
+  evidenceEvents: IncidentTimelineEvent[];
+  rawEvents: IncidentTimelineEvent[];
+  evidenceSignals: string[];
+  evidenceLinks?: IncidentEvidenceLink[];
+  chartPreset:
+    | 'takeoffEvidence'
+    | 'landingEvidence'
+    | 'modeTimeline'
+    | 'commandAck'
+    | 'failsafeWindow'
+    | 'estimatorFlags'
+    | null
+    | string;
+};
+```
+
+Grouping rules are intentionally conservative:
+
+- nearby events in the same phase are merged within a 5 second window;
+- takeoff groups may absorb nearby estimator or mode-change evidence;
+- landing groups may absorb nearby estimator, command, disarming, and mode-change
+  evidence;
+- failsafe and suspected-risk events keep their own high-priority groups;
+- all grouped records still retain `rawEvents`, so no original deterministic
+  event is lost.
+
+V1.3 timeline events include arming/disarming, takeoff/landing transitions,
+navigation mode changes, failsafe state changes, one estimator flag summary
+event, and the conservative warning `LOG_ENDED_WHILE_AIRBORNE_SUSPECTED` when
+the final landed state is false. The estimator summary reports that raw
+`estimator.flags` changed without repeating every bitmask transition as a
+separate timeline item. The airborne warning is a suspected state only, not an
+accident-cause conclusion.
+
+Each mapped standard signal is traceable to the original PX4 `topic`,
+`instance`, and `field` through `signalMappingReport` and `chartGroups[].series`.
+Each timeline event with chartable evidence also exposes `evidenceLinks[]`.
+Frontend V1.3 uses the first available link to set the timeline pointer, zoom
+charts to `timeWindow`, and highlight the matching chart. It should prefer
+`chartGroupId` for grouped V1.3 evidence charts and fall back to `chartTopic`
+for raw-topic charts.
+
+Takeoff and landing are deterministic state transitions from the standard
+signal `vehicle.landed`, mapped from PX4 `vehicle_land_detected.landed`.
+`TAKEOFF_DETECTED` is emitted when `vehicle.landed` changes from true (`> 0.5`)
+to false (`<= 0.5`). `LANDED_DETECTED` is emitted when it changes from false to
+true. These events do not infer cause; they only report the logged landed-state
+transition.
+
+Estimator status is mapped from `estimator_status_flags.control_status_flags`
+when available, then falls back to older estimator bitmask fields. V1.3 exposes
+only the estimator flag bits that actually changed as 0/1 chart series, and the
+timeline emits one `ESTIMATOR_FLAGS_SUMMARY` item listing the changed state
+names instead of repeating every raw bitmask transition.
+
+### V1.3 Flight Phase And Raw Event Unification
+
+Incident timeline events now keep two layers:
+
+- `rawEvent`: the direct field transition or field-change summary, for example
+  `vehicle_land_detected.landed true -> false`,
+  `vehicle_status.nav_state AUTO_TAKEOFF -> AUTO_MISSION`,
+  `estimator_selector_status.primary_instance 0 -> 1`, or decoded
+  `estimator_status_flags.cs_in_air=false -> true`.
+- `phase`: the inferred flight phase at that time, derived from multiple
+  available signals where possible. Supported phase names include
+  `ground_standby`, `armed_waiting_takeoff`, `takeoff_process`,
+  `liftoff_confirmed`, `takeoff_complete`, `normal_flight`,
+  `landing_process`, `ground_contact_process`, `landed_complete`, and
+  `auto_disarmed_after_landing`.
+
+Each `IncidentTimelineEvent` remains backward-compatible with `code`, `title`,
+`detail`, `evidence`, and `evidenceLinks`, and additionally exposes:
+
+```ts
+type IncidentTimelineEvent = {
+  phase: string;
+  description: string;
+  rawEvent: {
+    kind: 'field_change' | 'field_change_summary' | string;
+    signal?: string;
+    previous?: number | string | boolean | null;
+    current?: number | string | boolean | null;
+    previousLabel?: string;
+    currentLabel?: string;
+    stableDurationS?: number;
+    changedFields?: string[];
+  } | null;
+  confidence: 'high' | 'medium' | 'low' | string;
+  evidenceDetails: Array<{
+    signal: string;
+    message: string;
+    source_topic: string;
+    source_field: string;
+  }>;
+  source_topic: string;
+  source_field: string;
+  chart_hint: {
+    chartGroupId: string;
+    seriesId: string;
+    chartTopic: string;
+    targetTimeS: number;
+    timeWindow: { startS: number; endS: number };
+  } | null;
+};
+```
+
+`landed`, `maybe_landed`, `ground_contact`, and `at_rest` transitions are
+debounced with a default stability window of 0.5 seconds before they are used as
+confirmed phase events. Short bounces are ignored, and repeated events from the
+same source field are suppressed within a 1.0 second window.
+
+Confidence rules:
+
+- `high`: multiple independent signals support the same result, such as
+  `landed=false` plus `takeoff_status=FLIGHT`, or EKF primary instance change
+  plus `instance_changed_count`.
+- `medium`: one core state field changed and remained stable.
+- `low`: only a request was observed, such as `vehicle_command.command`, without
+  `vehicle_status.nav_state` confirmation.
+
+Flight mode changes are confirmed only by `vehicle_status.nav_state`.
+`vehicle_command` is treated as a command request, `vehicle_command_ack.result`
+as acceptance evidence, and `nav_state_user_intention` as supporting context
+that may differ from actual `nav_state` during failsafe.
+
+EKF instance switching is confirmed only by
+`estimator_selector_status.primary_instance` changes. `instance_changed_count`
+is supporting evidence. `estimator_status_flags` changes are summarized as human
+readable changed fields and are not treated as EKF instance switches.
+
+### V1.3 Standard Signals
+
+Required:
+
+```text
+log.timeS
+vehicle.armed
+vehicle.landed
+vehicle.navState
+vehicle.failsafe
+```
+
+Optional:
+
+```text
+position.altitudeRelative
+battery.voltage
+estimator.flags
+```
+
+Missing required signals downgrade `dataQuality.level` to `insufficient` or
+`invalid`. Missing optional signals are reported in `missingSignals` and may
+downgrade the result to `partial`, but they are not treated as anomaly events.
+
+## V1.3 Chart Data Contract Stability
+
+V1.3 stabilizes `GET /api/logs/chart-data` so both success and error responses
+share the same top-level shape. This lets the frontend safely read array fields
+without special-case fallback logic for `400` or `404` responses.
+
+All chart-data responses now include:
+
+```ts
+type ChartDataV13Base = {
+  contractVersion: 'chart-data.v1.3';
+  message: string;
+  code: string;
+  dataSource: string;
+  role: string;
+  availableRoles: string[];
+  logId: string;
+  fileName: string;
+  uploadedAt: string;
+  metadata: LogMetadata;
+  usedTopics: string[];
+  modeSegments: ModeSegment[];
+  series: ChartSeries[];
+  topicCharts: TopicChart[];
+  diagnostics: DiagnosticItem[];
+};
+```
+
+When `logId` is missing, the endpoint returns HTTP `400` with `code:
+'LOG_ID_REQUIRED'`. When the log is not found, it returns HTTP `404` with
+`code: 'LOG_NOT_FOUND'`. In both cases, `series`, `topicCharts`, `diagnostics`,
+`modeSegments`, and `usedTopics` are empty arrays.

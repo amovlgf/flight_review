@@ -64,6 +64,23 @@ function getSeriesVisualStyle(name: string, index: number) {
   }
 }
 
+function isDiscreteStateSeries(name: string) {
+  const normalizedName = name.trim().toLowerCase()
+  return (
+    normalizedName.endsWith('.state') ||
+    normalizedName.endsWith('state') ||
+    normalizedName.includes('armed') ||
+    normalizedName.includes('landed') ||
+    normalizedName.includes('failsafe') ||
+    normalizedName.includes('groundcontact') ||
+    normalizedName.includes('atrest') ||
+    normalizedName.includes('ingroundeffect') ||
+    normalizedName.includes('currenttype') ||
+    normalizedName.includes('primaryinstance') ||
+    normalizedName.includes('instancechangedcount')
+  )
+}
+
 function normalizeSeriesPoints(points: unknown): Array<[number, number]> {
   if (!Array.isArray(points)) {
     return []
@@ -276,16 +293,20 @@ export function buildTopicChartOption(
     ],
     series: normalizedSeries.map((item, idx) => {
       const visualStyle = getSeriesVisualStyle(item.name, idx)
+      const isStateSeries = isDiscreteStateSeries(item.name)
 
       return {
         name: `${getSeriesDisplayName(item.name)} (${item.unit})`,
         type: 'line',
         smooth: false,
-        showSymbol: false,
+        step: isStateSeries ? ('end' as const) : false,
+        showSymbol: isStateSeries || item.points.length <= 1,
+        symbol: 'circle',
+        symbolSize: item.points.length <= 1 ? 7 : 5,
         data: item.points,
         lineStyle: {
           color: visualStyle.color,
-          width: visualStyle.width,
+          width: isStateSeries ? Math.max(visualStyle.width, 2.8) : visualStyle.width,
           type: visualStyle.type,
           opacity: visualStyle.opacity,
         },
@@ -311,7 +332,7 @@ export function buildTopicChartOption(
                   overflow: 'truncate',
                 },
                 itemStyle: {
-                  opacity: 0.1,
+                  opacity: 0.08,
                 },
                 data: normalizedModeSegments.map((seg) => [
                   {
@@ -320,7 +341,7 @@ export function buildTopicChartOption(
                     xAxis: seg.start,
                     itemStyle: {
                       color: seg.color || '#94a3b8',
-                      opacity: 0.12,
+                      opacity: 0.08,
                     },
                   },
                   { xAxis: seg.end },

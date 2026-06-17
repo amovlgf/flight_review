@@ -284,3 +284,38 @@ test('parse_ulg.py can return lightweight unlock summary only', () => {
   assert.equal(payload.unlockSummary.hasUnlockedFlight, true);
   assert.equal(payload.unlockSummary.flightTimeS, 1);
 });
+
+test('parse_ulg.py raw signals mode uses one global log time axis', () => {
+  const payload = runParserWithDatasets(
+    [
+      {
+        name: 'vehicle_status',
+        data: {
+          timestamp: [10_000_000, 11_000_000],
+          arming_state: [1, 2],
+          nav_state: [0, 2],
+        },
+      },
+      {
+        name: 'battery_status',
+        data: {
+          timestamp: [12_000_000, 13_000_000],
+          voltage_v: [16.2, 15.9],
+        },
+      },
+    ],
+    ['--raw-signals'],
+  );
+
+  assert.equal(payload.dataSource, 'px4-raw-signals');
+  assert.equal(payload.timeRange.startS, 0);
+  assert.equal(payload.timeRange.endS, 3);
+
+  const statusTopic = payload.rawTopics.find((item) => item.topic === 'vehicle_status');
+  const batteryTopic = payload.rawTopics.find((item) => item.topic === 'battery_status');
+
+  assert.deepEqual(statusTopic.timeS, [0, 1]);
+  assert.deepEqual(batteryTopic.timeS, [2, 3]);
+  assert.deepEqual(statusTopic.fields.arming_state, [1, 2]);
+  assert.deepEqual(batteryTopic.fields.voltage_v, [16.2, 15.9]);
+});

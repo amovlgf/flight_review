@@ -54,6 +54,7 @@ type ChartPanelProps = {
   timelinePointer?: number | null
   isTimelinePlaying?: boolean
   activeChartTopic?: string
+  activeSeriesName?: string
   activeChartBadgeLabel?: string
   chartHint: string
   emptyStateMessage?: string
@@ -77,10 +78,11 @@ type ChartCardProps = {
   series: ChartSeries[]
   modeSegments: ModeSegment[]
   selectedKeys?: string[]
-  selectionBox?: NormalizedSelectionBox | null
+  selectionBox?: ChartSelectionPreview | null
   timelinePointer?: number | null
   isTimelinePlaying?: boolean
   isActive?: boolean
+  focusSeriesName?: string
   activeBadgeLabel?: string
   onChartReady: (
     chartKey: string,
@@ -90,11 +92,24 @@ type ChartCardProps = {
   onChartDispose?: (chartKey: string) => void
   onTimelineSeek?: (timeValue: number) => void
   onToggleTimelinePlayback?: () => void
-  onToggleSeries: (
-    chartId: string,
-    series: ChartSeries[],
-    seriesKey: string,
+  onToggleSeries: (chartId: string, seriesKey: string) => void
+}
+
+type RegisteredTopicChartProps = {
+  chartKey: string
+  selectionBox?: ChartSelectionPreview | null
+  timelinePointer?: number | null
+  isTimelinePlaying?: boolean
+  option: Record<string, unknown>
+  timeRange: ChartTimeRange
+  onChartReady: (
+    chartKey: string,
+    instance: unknown,
+    timeRange: ChartTimeRange,
   ) => void
+  onChartDispose?: (chartKey: string) => void
+  onTimelineSeek?: (timeValue: number) => void
+  onToggleTimelinePlayback?: () => void
 }
 
 export type ChartTimeRange = {
@@ -117,6 +132,18 @@ function getVisibleSeries(series: ChartSeries[], selectedKeys?: string[]) {
   )
 }
 
+function findFocusSeriesKey(series: ChartSeries[], focusSeriesName?: string) {
+  if (!focusSeriesName) return ''
+  const normalizedFocusName = focusSeriesName.trim().toLowerCase()
+  if (!normalizedFocusName) return ''
+
+  const matchIndex = series.findIndex(
+    (item) => item.name.trim().toLowerCase() === normalizedFocusName,
+  )
+
+  return matchIndex >= 0 ? getSeriesKey(series[matchIndex], matchIndex) : ''
+}
+
 function getSeriesTimeRange(series: ChartSeries[]): ChartTimeRange {
   const timeBounds = getSeriesTimeBounds(series)
   return {
@@ -130,6 +157,65 @@ function buildChartId(topicChart: TopicChart, index: number) {
   return `${baseKey}__${index}`
 }
 
+function RegisteredTopicChart({
+  chartKey,
+  selectionBox,
+  timelinePointer,
+  isTimelinePlaying = false,
+  option,
+  timeRange,
+  onChartReady,
+  onChartDispose,
+  onTimelineSeek,
+  onToggleTimelinePlayback,
+}: RegisteredTopicChartProps) {
+  const handleChartReady = useCallback(
+    (instance: unknown) => {
+      onChartReady(chartKey, instance, timeRange)
+    },
+    [chartKey, onChartReady, timeRange],
+  )
+
+  useEffect(() => {
+    return () => {
+      onChartDispose?.(chartKey)
+    }
+  }, [chartKey, onChartDispose])
+
+  const activeSelectionBox =
+    selectionBox?.chartId === chartKey ? selectionBox : null
+
+  return (
+    <div className="chart-canvas-shell">
+      <ReactECharts
+        key={chartKey}
+        option={option}
+        lazyUpdate
+        style={{ height: 360 }}
+        onChartReady={handleChartReady}
+      />
+      {activeSelectionBox ? (
+        <div
+          className="chart-selection-box"
+          style={{
+            left: activeSelectionBox.left,
+            top: activeSelectionBox.top,
+            width: activeSelectionBox.width,
+            height: activeSelectionBox.height,
+          }}
+        />
+      ) : null}
+      <ChartTimelineScrubber
+        timeRange={timeRange}
+        timelinePointer={timelinePointer ?? null}
+        isTimelinePlaying={isTimelinePlaying}
+        onTimelineSeek={onTimelineSeek}
+        onTogglePlayback={onToggleTimelinePlayback}
+      />
+    </div>
+  )
+}
+
 const ChartCard = memo(function ChartCard({
   chartId,
   topic,
@@ -141,6 +227,7 @@ const ChartCard = memo(function ChartCard({
   timelinePointer,
   isTimelinePlaying = false,
   isActive = false,
+  focusSeriesName,
   activeBadgeLabel,
   onChartReady,
   onChartDispose,
@@ -148,11 +235,24 @@ const ChartCard = memo(function ChartCard({
   onToggleTimelinePlayback,
   onToggleSeries,
 }: ChartCardProps) {
-  const allKeys = useMemo(() => series.map(getSeriesKey), [series])
-  const activeSelectedKeys = selectedKeys ?? allKeys
+  const focusSeriesKey = useMemo(
+    () => findFocusSeriesKey(series, focusSeriesName),
+    [focusSeriesName, series],
+  )
+  const activeSelectedKeys = useMemo(
+    () => (focusSeriesKey ? [focusSeriesKey] : selectedKeys ?? []),
+    [focusSeriesKey, selectedKeys],
+  )
   const visibleSeries = useMemo(
     () => getVisibleSeries(series, activeSelectedKeys),
     [activeSelectedKeys, series],
+  )
+  const focusedSeries = useMemo(
+    () =>
+      focusSeriesKey
+        ? series.find((item, index) => getSeriesKey(item, index) === focusSeriesKey)
+        : null,
+    [focusSeriesKey, series],
   )
   const timeRange = useMemo(() => getSeriesTimeRange(series), [series])
 
@@ -178,25 +278,12 @@ const ChartCard = memo(function ChartCard({
     }
   }, [chartId, modeSegments, title, visibleSeries])
 
-  const handleChartReady = useCallback(
-    (instance: unknown) => {
-      onChartReady(chartId, instance, timeRange)
-    },
-    [chartId, onChartReady, timeRange],
-  )
-
   const handleSeriesToggle = useCallback(
     (seriesKey: string) => {
-      onToggleSeries(chartId, series, seriesKey)
+      onToggleSeries(chartId, seriesKey)
     },
-    [chartId, onToggleSeries, series],
+    [chartId, onToggleSeries],
   )
-
-  useEffect(() => {
-    return () => {
-      onChartDispose?.(chartId)
-    }
-  }, [chartId, onChartDispose])
 
   return (
     <div
@@ -210,7 +297,14 @@ const ChartCard = memo(function ChartCard({
         ) : null}
       </div>
 
-      {series.length > 0 ? (
+      {isActive && focusedSeries ? (
+        <div className="series-selector series-selector-focused">
+          <span className="series-selector-label">{'证据聚焦字段：'}</span>
+          <span className="series-focus-pill">
+            {`${getSeriesDisplayName(focusedSeries.name)} (${focusedSeries.unit})`}
+          </span>
+        </div>
+      ) : series.length > 0 ? (
         <div className="series-selector">
           <span className="series-selector-label">{'显示字段：'}</span>
           {series.map((item, index) => {
@@ -234,34 +328,20 @@ const ChartCard = memo(function ChartCard({
           {`该图表配置失败：${chartOptionState.error}`}
         </div>
       ) : visibleSeries.length === 0 ? (
-        <div className="chart-placeholder">{'当前图表暂无可显示字段'}</div>
+        <div className="chart-placeholder">{'请选择上方字段以显示曲线。'}</div>
       ) : (
-        <div className="chart-canvas-shell">
-          <ReactECharts
-            option={chartOptionState.option}
-            lazyUpdate
-            style={{ height: 360 }}
-            onChartReady={handleChartReady}
-          />
-          {selectionBox ? (
-            <div
-              className="chart-selection-box"
-              style={{
-                left: selectionBox.left,
-                top: selectionBox.top,
-                width: selectionBox.width,
-                height: selectionBox.height,
-              }}
-            />
-          ) : null}
-          <ChartTimelineScrubber
-            timeRange={timeRange}
-            timelinePointer={timelinePointer ?? null}
-            isTimelinePlaying={isTimelinePlaying}
-            onTimelineSeek={onTimelineSeek}
-            onTogglePlayback={onToggleTimelinePlayback}
-          />
-        </div>
+        <RegisteredTopicChart
+          chartKey={chartId}
+          selectionBox={selectionBox}
+          timelinePointer={timelinePointer}
+          isTimelinePlaying={isTimelinePlaying}
+          option={chartOptionState.option ?? {}}
+          timeRange={timeRange}
+          onChartReady={onChartReady}
+          onChartDispose={onChartDispose}
+          onTimelineSeek={onTimelineSeek}
+          onToggleTimelinePlayback={onToggleTimelinePlayback}
+        />
       )}
     </div>
   )
@@ -277,6 +357,7 @@ function ChartPanel({
   timelinePointer,
   isTimelinePlaying = false,
   activeChartTopic,
+  activeSeriesName,
   activeChartBadgeLabel,
   chartHint,
   emptyStateMessage,
@@ -291,11 +372,9 @@ function ChartPanel({
   )
 
   const handleSeriesToggle = useCallback(
-    (chartId: string, series: ChartSeries[], seriesKey: string) => {
-      const allKeys = series.map(getSeriesKey)
-
+    (chartId: string, seriesKey: string) => {
       setSelectedSeriesMap((current) => {
-        const currentKeys = current[chartId] ?? allKeys
+        const currentKeys = current[chartId] ?? []
         const nextKeys = currentKeys.includes(seriesKey)
           ? currentKeys.filter((key) => key !== seriesKey)
           : [...currentKeys, seriesKey]
@@ -323,9 +402,14 @@ function ChartPanel({
             typeof activeChartTopic === 'string' &&
             activeChartTopic.length > 0 &&
             topicChart.topic === activeChartTopic,
+          focusSeriesName:
+            typeof activeChartTopic === 'string' &&
+            topicChart.topic === activeChartTopic
+              ? activeSeriesName
+              : undefined,
         }
       }),
-    [activeChartTopic, selectedSeriesMap, topicCharts],
+    [activeChartTopic, activeSeriesName, selectedSeriesMap, topicCharts],
   )
 
   const resolvedEmptyStateMessage =
@@ -358,12 +442,11 @@ function ChartPanel({
               series={item.series}
               modeSegments={modeSegments}
               selectedKeys={item.selectedKeys}
-              selectionBox={
-                selectionBox?.chartId === item.chartId ? selectionBox : null
-              }
+              selectionBox={selectionBox}
               timelinePointer={timelinePointer ?? null}
               isTimelinePlaying={isTimelinePlaying}
               isActive={item.isActive}
+              focusSeriesName={item.focusSeriesName}
               activeBadgeLabel={activeChartBadgeLabel}
               onChartReady={onChartReady}
               onChartDispose={onChartDispose}
@@ -382,9 +465,7 @@ function ChartPanel({
           series={seriesData}
           modeSegments={modeSegments}
           selectedKeys={selectedSeriesMap.default}
-          selectionBox={
-            selectionBox?.chartId === 'default' ? selectionBox : null
-          }
+          selectionBox={selectionBox}
           timelinePointer={timelinePointer ?? null}
           isTimelinePlaying={isTimelinePlaying}
           onChartReady={onChartReady}

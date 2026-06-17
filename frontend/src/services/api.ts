@@ -5,6 +5,7 @@ import type {
   ControlQualityPayload,
   ControlQualityReport,
   FetchLogListParams,
+  IncidentAnalysisResponse,
   LogListResponse,
   UploadLogResponse,
 } from '../types/log'
@@ -107,6 +108,33 @@ export async function fetchChartData(
 
   if (!response.ok) {
     let errorMessage = 'FETCH_CHART_DATA_FAILED'
+    try {
+      const payload = await response.json()
+      if (payload && typeof payload.message === 'string') {
+        errorMessage = payload.message
+      }
+    } catch {
+      // ignore JSON parse error and keep default message
+    }
+    throw new Error(errorMessage)
+  }
+
+  return response.json()
+}
+
+export async function runIncidentAnalysis(
+  logId: string,
+): Promise<IncidentAnalysisResponse> {
+  const response = await fetch(`${API_BASE_URL}/logs/${logId}/incident-analysis`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({}),
+  })
+
+  if (!response.ok) {
+    let errorMessage = 'INCIDENT_ANALYSIS_FAILED'
     try {
       const payload = await response.json()
       if (payload && typeof payload.message === 'string') {

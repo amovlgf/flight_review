@@ -339,6 +339,152 @@ def parse_unlock_summary(file_path):
     print(json.dumps({"unlockSummary": build_unlock_summary(vehicle_status, actuator_armed)}))
 
 
+RAW_SIGNAL_TOPIC_NAMES = [
+    "actuator_armed",
+    "battery_status",
+    "battery_status_0",
+    "estimator_selector_status",
+    "estimator_status",
+    "estimator_status_flags",
+    "mode_completed",
+    "position_setpoint_triplet",
+    "takeoff_status",
+    "vehicle_command",
+    "vehicle_command_ack",
+    "vehicle_land_detected",
+    "vehicle_local_position",
+    "vehicle_status",
+]
+
+
+def get_dataset_instance(ds):
+    if hasattr(ds, "multi_id"):
+        try:
+            return int(ds.multi_id)
+        except Exception:
+            return 0
+    return 0
+
+
+def get_global_time_range(datasets):
+    timestamps = []
+    for ds in datasets:
+        data = ds.data
+        if "timestamp" not in data:
+            continue
+        for value in data["timestamp"]:
+            try:
+                timestamp = float(value)
+            except Exception:
+                continue
+            if math.isnan(timestamp) or math.isinf(timestamp):
+                continue
+            timestamps.append(timestamp)
+
+    if not timestamps:
+        return None
+
+    return min(timestamps), max(timestamps)
+
+
+def normalize_time_us_from_start(timestamp_array, start_us):
+    if timestamp_array is None or len(timestamp_array) == 0:
+        return []
+    result = []
+    for ts in timestamp_array:
+        try:
+            timestamp = float(ts)
+        except Exception:
+            result.append(None)
+            continue
+        if math.isnan(timestamp) or math.isinf(timestamp):
+            result.append(None)
+            continue
+        result.append(round((timestamp - start_us) / 1_000_000.0, 6))
+    return result
+
+
+def serialize_numeric_field(values):
+    serialized = []
+    for value in values:
+        try:
+            numeric_value = float(value)
+        except Exception:
+            serialized.append(None)
+            continue
+        if math.isnan(numeric_value) or math.isinf(numeric_value):
+            serialized.append(None)
+            continue
+        serialized.append(numeric_value)
+    return serialized
+
+
+def parse_raw_signals(file_path):
+    ulog = ULog(file_path, message_name_filter_list=RAW_SIGNAL_TOPIC_NAMES)
+    datasets = [
+        ds
+        for ds in ulog.data_list
+        if ds.name in RAW_SIGNAL_TOPIC_NAMES and "timestamp" in ds.data
+    ]
+    time_range = get_global_time_range(datasets)
+
+    if not time_range:
+        print(
+            json.dumps(
+                {
+                    "dataSource": "px4-raw-signals",
+                    "timeRange": None,
+                    "rawTopics": [],
+                }
+            )
+        )
+        return
+
+    start_us, end_us = time_range
+    raw_topics = []
+    ignored_exact = {"timestamp", "timestamp_sample"}
+    ignored_prefixes = ("_padding",)
+
+    for ds in datasets:
+        data = ds.data
+        timestamps = normalize_time_us_from_start(data["timestamp"], start_us)
+        fields = {}
+        sample_count = len(timestamps)
+
+        for field_name in sorted(data.keys()):
+            if field_name in ignored_exact:
+                continue
+            if any(field_name.startswith(prefix) for prefix in ignored_prefixes):
+                continue
+
+            values = data[field_name]
+            if not is_numeric_series(values):
+                continue
+            field_values = serialize_numeric_field(values)
+            fields[field_name] = field_values[:sample_count]
+
+        raw_topics.append(
+            {
+                "topic": ds.name,
+                "instance": get_dataset_instance(ds),
+                "timeS": timestamps,
+                "fields": fields,
+            }
+        )
+
+    payload = {
+        "dataSource": "px4-raw-signals",
+        "timeRange": {
+            "startS": 0,
+            "endS": round((end_us - start_us) / 1_000_000.0, 6),
+            "startTimestampUs": start_us,
+            "endTimestampUs": end_us,
+        },
+        "rawTopics": raw_topics,
+    }
+    print(json.dumps(payload))
+
+
 def append_generic_topic(topic_charts, used_topics, ds, max_fields=24):
     if not ds:
         return
@@ -607,6 +753,12 @@ def main():
         if len(sys.argv) < 3:
             raise RuntimeError("FILE_PATH_REQUIRED")
         parse_unlock_summary(sys.argv[2])
+        return
+
+    if sys.argv[1] == "--raw-signals":
+        if len(sys.argv) < 3:
+            raise RuntimeError("FILE_PATH_REQUIRED")
+        parse_raw_signals(sys.argv[2])
         return
 
     file_path = sys.argv[1]

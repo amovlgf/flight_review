@@ -126,6 +126,20 @@ function parsePx4UnlockSummary(filePath) {
   return JSON.parse(output);
 }
 
+function parsePx4RawSignals(filePath) {
+  const parserScriptPath = path.join(__dirname, '..', 'scripts', 'parse_ulg.py');
+  const output = execFileSync(
+    'python',
+    ['-X', 'utf8', parserScriptPath, '--raw-signals', filePath],
+    {
+      encoding: 'utf8',
+      maxBuffer: PYTHON_PARSER_MAX_BUFFER_BYTES,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  return JSON.parse(output);
+}
+
 function buildDefaultUnlockSummary() {
   return {
     hasUnlockedFlight: false,
@@ -325,4 +339,5 @@ module.exports = {
   buildParsedLog,
   buildLogUnlockAnalysis,
   ensureStoredLogParsed,
+  parsePx4RawSignals,
 };
