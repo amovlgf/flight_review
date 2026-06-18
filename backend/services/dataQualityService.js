@@ -8,6 +8,12 @@ function makeRule(code, level, message) {
   return { code, level, message };
 }
 
+function hasBatteryInfo(signals) {
+  return ['battery.voltage', 'battery.current', 'battery.remaining'].some((id) =>
+    isSignalAvailable(signals, id),
+  );
+}
+
 function pickWorstLevel(ruleResults) {
   for (const level of QUALITY_ORDER.slice().reverse()) {
     if (ruleResults.some((item) => item.level === level)) {
@@ -32,7 +38,7 @@ function buildAnalysisCapability(signals, dataQualityLevel) {
   const capabilityChecks = [
     ['phaseDetection', phaseDetection, 'vehicle.armed or vehicle.landed missing'],
     ['eventExtraction', eventExtraction, 'vehicle.navState or vehicle.failsafe missing'],
-    ['batteryAnalysis', isSignalAvailable(signals, 'battery.voltage'), 'battery.voltage missing'],
+    ['batteryAnalysis', hasBatteryInfo(signals), 'battery information missing'],
     ['estimatorAnalysis', isSignalAvailable(signals, 'estimator.flags'), 'estimator.flags missing'],
   ];
 
@@ -47,7 +53,7 @@ function buildAnalysisCapability(signals, dataQualityLevel) {
     attitudeAnalysis: false,
     rateAnalysis: false,
     actuatorAnalysis: false,
-    batteryAnalysis: isSignalAvailable(signals, 'battery.voltage'),
+    batteryAnalysis: hasBatteryInfo(signals),
     estimatorAnalysis: isSignalAvailable(signals, 'estimator.flags'),
     reasons,
   };
@@ -86,9 +92,9 @@ function evaluateDataQuality({ signals, parserFailed = false, parseError = null 
     ruleResults.push(makeRule('DQ_MISSING_NAV_STATE', 'partial', 'Navigation mode timeline is unavailable.'));
   }
 
-  if (!isSignalAvailable(signals, 'battery.voltage')) {
+  if (!hasBatteryInfo(signals)) {
     ruleResults.push(
-      makeRule('DQ_MISSING_OPTIONAL_BATTERY', 'partial', 'Battery voltage data is unavailable.'),
+      makeRule('DQ_MISSING_OPTIONAL_BATTERY', 'partial', 'Battery data is unavailable.'),
     );
   }
 

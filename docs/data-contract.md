@@ -434,6 +434,23 @@ timeline event to the relevant chart window. It still does not output root
 causes, hardware fault claims, or accident probabilities.
 
 ```ts
+type FlightSummary = {
+  // Full raw-log span measured from the global raw-signal timestamp origin.
+  durationS: number | null;
+  // Total unlocked/armed time reported by the unlock summary.
+  armedFlightTimeS: number | null;
+  // Seconds to subtract from global event/chart times for flight-relative UI.
+  displayTimeOffsetS: number | null;
+  // Preferred visible flight window. Falls back to log.timeS when armed data is unavailable.
+  flightWindow: {
+    startS: number;
+    endS: number;
+    durationS: number;
+    source: 'vehicle.armed' | 'log.timeS' | string;
+  } | null;
+  unlockCount: number | null;
+};
+
 type IncidentFlightPhase = {
   phase:
     | 'ground_preflight'
@@ -716,12 +733,16 @@ Optional:
 ```text
 position.altitudeRelative
 battery.voltage
+battery.current
+battery.remaining
 estimator.flags
 ```
 
 Missing required signals downgrade `dataQuality.level` to `insufficient` or
 `invalid`. Missing optional signals are reported in `missingSignals` and may
 downgrade the result to `partial`, but they are not treated as anomaly events.
+`analysisCapability.batteryAnalysis` is true when at least one battery
+information signal is available: voltage, current, or remaining capacity.
 
 ## V1.3 Chart Data Contract Stability
 

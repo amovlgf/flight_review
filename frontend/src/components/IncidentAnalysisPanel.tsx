@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type {
   IncidentEventGroup,
@@ -7,11 +7,13 @@ import type {
   ModeSegment,
 } from '../types/log'
 import ChartTimelineScrubber from './ChartTimelineScrubber'
+import type { ChartSelectionPreview, ChartTimeRange } from './ChartPanel'
 import { buildTopicChartOption } from '../utils/chartOptions'
 import {
   alignModeSegmentsToEvidenceTime,
   getEvidenceChart,
   getEvidenceDisplayRange,
+  getEvidenceTimelineRange,
 } from '../utils/incidentEvidenceChart'
 
 type IncidentAnalysisPanelProps = {
@@ -21,6 +23,13 @@ type IncidentAnalysisPanelProps = {
   errorText: string
   onRun: () => void
   modeSegments?: ModeSegment[]
+  selectionBox?: ChartSelectionPreview | null
+  onChartReady?: (
+    chartKey: string,
+    instance: unknown,
+    timeRange: ChartTimeRange,
+  ) => void
+  onChartDispose?: (chartKey: string) => void
   onEventFocus?: (event: IncidentTimelineEvent) => void
 }
 
@@ -55,6 +64,7 @@ const reasonLabels: Record<string, string> = {
   'vehicle.navState or vehicle.failsafe missing':
     '缺少飞行模式或 failsafe 状态，事件提取能力受限',
   'battery.voltage missing': '缺少电池电压数据',
+  'battery information missing': '缺少电池信息数据',
   'estimator.flags missing': '缺少估计器状态数据',
 }
 
@@ -191,17 +201,24 @@ function getValueBounds(series: Array<{ points: Array<[number, number]> }>) {
   }
 }
 
-function buildVisibleYAxis(option: ReturnType<typeof buildTopicChartOption>, series: Array<{ points: Array<[number, number]> }>) {
+function buildVisibleYAxis(
+  option: ReturnType<typeof buildTopicChartOption>,
+  series: Array<{ points: Array<[number, number]> }>,
+) {
   const bounds = getValueBounds(series)
   if (!bounds) return option.yAxis
 
   const span = bounds.max - bounds.min
   const padding = span > 0 ? Math.max(span * 0.12, 0.08) : Math.max(Math.abs(bounds.max) * 0.12, 0.2)
-  return {
-    ...option.yAxis,
-    min: bounds.min - padding,
-    max: bounds.max + padding,
-  }
+  return option.yAxis.map((axis, index) =>
+    index === 0
+      ? {
+          ...axis,
+          min: bounds.min - padding,
+          max: bounds.max + padding,
+        }
+      : axis,
+  )
 }
 
 function getVisibleModeSegments(
@@ -274,13 +291,24 @@ function EventEvidenceChart({
   report,
   event,
   modeSegments = [],
+  selectionBox,
+  onChartReady,
+  onChartDispose,
 }: {
   report: IncidentAnalysisResponse
   event: IncidentTimelineEvent
   modeSegments?: ModeSegment[]
+  selectionBox?: ChartSelectionPreview | null
+  onChartReady?: (
+    chartKey: string,
+    instance: unknown,
+    timeRange: ChartTimeRange,
+  ) => void
+  onChartDispose?: (chartKey: string) => void
 }) {
   const chart = useMemo(() => getEvidenceChart(report, event), [event, report])
   const evidenceTimeS = chart?.targetTimeS ?? event.timeS
+  const chartKey = `incident-evidence__${event.id}`
   const [timelineState, setTimelineState] = useState({
     eventId: event.id,
     value: evidenceTimeS,
@@ -291,26 +319,40 @@ function EventEvidenceChart({
     setTimelineState({ eventId: event.id, value })
   }
   const timeRange = useMemo(() => {
-    return chart ? getEvidenceDisplayRange(chart) : { start: 0, end: 0 }
+    return chart ? getEvidenceTimelineRange(chart) : { start: 0, end: 0 }
   }, [chart])
+  const activeSelectionBox =
+    selectionBox?.chartId === chartKey ? selectionBox : null
+  const handleChartReady = useCallback(
+    (instance: unknown) => {
+      onChartReady?.(chartKey, instance, timeRange)
+    },
+    [chartKey, onChartReady, timeRange],
+  )
+
+  useEffect(() => {
+    return () => {
+      onChartDispose?.(chartKey)
+    }
+  }, [chartKey, onChartDispose])
   const visibleModeSegments = useMemo(() => {
     if (!chart) return []
 
-    const displayRange = getEvidenceDisplayRange(chart)
+    const displayRange = getEvidenceDisplayRange(chart, timelinePointer)
     const alignedModeSegments = alignModeSegmentsToEvidenceTime(
       modeSegments,
       chart.timeOffsetS,
     )
 
     return getVisibleModeSegments(alignedModeSegments, displayRange)
-  }, [chart, modeSegments])
+  }, [chart, modeSegments, timelinePointer])
   const modeBackgroundSummary = useMemo(
     () => formatModeBackgroundSummary(visibleModeSegments, modeSegments),
     [modeSegments, visibleModeSegments],
   )
   const option = useMemo(() => {
     if (!chart) return null
-    const displayRange = getEvidenceDisplayRange(chart)
+    const displayRange = getEvidenceDisplayRange(chart, timelinePointer)
     const nextOption = buildTopicChartOption(
       {
         topic: event.id,
@@ -318,14 +360,19 @@ function EventEvidenceChart({
         series: chart.series,
       },
       visibleModeSegments,
+      { showModeTrack: false },
     )
-    const keyPoint = findNearestPoint(chart.series, evidenceTimeS)
+    const keyPoint = findNearestPoint(chart.series, timelinePointer)
     const yAxis = buildVisibleYAxis(nextOption, chart.series)
-    const xAxis = {
-      ...nextOption.xAxis,
-      min: displayRange.start,
-      max: displayRange.end,
-    }
+    const xAxis = nextOption.xAxis.map((axis, index) =>
+      index === 0
+        ? {
+            ...axis,
+            min: displayRange.start,
+            max: displayRange.end,
+          }
+        : axis,
+    )
     const seriesWithMarker = nextOption.series.map((item, index) =>
       index === 0
         ? {
@@ -340,10 +387,10 @@ function EventEvidenceChart({
                 type: 'dashed',
               },
               label: {
-                formatter: `${evidenceTimeS.toFixed(2)}s`,
+                formatter: `${timelinePointer.toFixed(2)}s`,
                 color: '#1d4ed8',
               },
-              data: [{ xAxis: evidenceTimeS }],
+              data: [{ xAxis: timelinePointer }],
             },
             markPoint: keyPoint
               ? {
@@ -374,7 +421,7 @@ function EventEvidenceChart({
         endValue: displayRange.end,
       })),
     }
-  }, [chart, event.id, evidenceTimeS, visibleModeSegments])
+  }, [chart, event.id, timelinePointer, visibleModeSegments])
 
   if (!chart || !option) {
     return <div className="incident-inline-chart-empty">暂无可展示的证据图表</div>
@@ -392,7 +439,24 @@ function EventEvidenceChart({
       </div>
       <div className="incident-mode-background-note">{modeBackgroundSummary}</div>
       <div className="chart-canvas-shell">
-        <ReactECharts option={option} lazyUpdate style={{ height: 360 }} />
+        <ReactECharts
+          key={chartKey}
+          option={option}
+          lazyUpdate
+          style={{ height: 360 }}
+          onChartReady={handleChartReady}
+        />
+        {activeSelectionBox ? (
+          <div
+            className="chart-selection-box"
+            style={{
+              left: activeSelectionBox.left,
+              top: activeSelectionBox.top,
+              width: activeSelectionBox.width,
+              height: activeSelectionBox.height,
+            }}
+          />
+        ) : null}
         <ChartTimelineScrubber
           timeRange={timeRange}
           timelinePointer={timelinePointer}
@@ -434,6 +498,9 @@ function TimelineEventItem({
   event,
   report,
   modeSegments,
+  selectionBox,
+  onChartReady,
+  onChartDispose,
   expandedEvidenceEventIds,
   onToggleEvidenceChart,
   compact = false,
@@ -441,6 +508,13 @@ function TimelineEventItem({
   event: IncidentTimelineEvent
   report: IncidentAnalysisResponse
   modeSegments: ModeSegment[]
+  selectionBox?: ChartSelectionPreview | null
+  onChartReady?: (
+    chartKey: string,
+    instance: unknown,
+    timeRange: ChartTimeRange,
+  ) => void
+  onChartDispose?: (chartKey: string) => void
   expandedEvidenceEventIds: string[]
   onToggleEvidenceChart: (eventId: string) => void
   compact?: boolean
@@ -484,7 +558,14 @@ function TimelineEventItem({
           <small>暂无可定位图表信号</small>
         )}
         {expandedEvidenceEventIds.includes(event.id) ? (
-          <EventEvidenceChart report={report} event={event} modeSegments={modeSegments} />
+          <EventEvidenceChart
+            report={report}
+            event={event}
+            modeSegments={modeSegments}
+            selectionBox={selectionBox}
+            onChartReady={onChartReady}
+            onChartDispose={onChartDispose}
+          />
         ) : null}
       </div>
     </li>
@@ -498,6 +579,9 @@ function IncidentAnalysisPanel({
   errorText,
   onRun,
   modeSegments = [],
+  selectionBox,
+  onChartReady,
+  onChartDispose,
 }: IncidentAnalysisPanelProps) {
   const [expandedEvidenceEventIds, setExpandedEvidenceEventIds] = useState<
     string[]
@@ -665,6 +749,9 @@ function IncidentAnalysisPanel({
                             report={report}
                             event={groupEvent}
                             modeSegments={modeSegments}
+                            selectionBox={selectionBox}
+                            onChartReady={onChartReady}
+                            onChartDispose={onChartDispose}
                           />
                         ) : null}
                         {isRawExpanded ? (
@@ -675,6 +762,9 @@ function IncidentAnalysisPanel({
                                 event={event}
                                 report={report}
                                 modeSegments={modeSegments}
+                                selectionBox={selectionBox}
+                                onChartReady={onChartReady}
+                                onChartDispose={onChartDispose}
                                 expandedEvidenceEventIds={expandedEvidenceEventIds}
                                 onToggleEvidenceChart={toggleEvidenceChart}
                                 compact
@@ -695,6 +785,9 @@ function IncidentAnalysisPanel({
                     event={event}
                     report={report}
                     modeSegments={modeSegments}
+                    selectionBox={selectionBox}
+                    onChartReady={onChartReady}
+                    onChartDispose={onChartDispose}
                     expandedEvidenceEventIds={expandedEvidenceEventIds}
                     onToggleEvidenceChart={toggleEvidenceChart}
                   />

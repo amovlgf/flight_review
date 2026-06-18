@@ -3,6 +3,7 @@ import {
   alignModeSegmentsToEvidenceTime,
   getEvidenceChart,
   getEvidenceDisplayRange,
+  getEvidenceTimelineRange,
 } from '../utils/incidentEvidenceChart'
 import type { IncidentAnalysisResponse, IncidentTimelineEvent, ModeSegment } from '../types/log'
 
@@ -119,6 +120,71 @@ describe('IncidentAnalysisPanel evidence chart helpers', () => {
     expect(getEvidenceDisplayRange(chart!)).toEqual({
       start: 61.44,
       end: 71.44,
+    })
+    expect(getEvidenceDisplayRange(chart!, 61.667)).toEqual({
+      start: 56.667,
+      end: 66.667,
+    })
+  })
+
+  it('keeps the first evidence view focused while allowing the scrubber to span the whole series', () => {
+    const chart = getEvidenceChart(buildReport(), buildEvent())
+
+    expect(chart).not.toBeNull()
+    expect(getEvidenceDisplayRange(chart!)).toEqual({
+      start: 61.44,
+      end: 71.44,
+    })
+    expect(getEvidenceTimelineRange(chart!)).toEqual({
+      start: 0,
+      end: 80,
+    })
+  })
+
+  it('renders global incident evidence on the flight-relative time axis', () => {
+    const report = buildReport()
+    report.flightSummary = {
+      ...report.flightSummary,
+      durationS: 154.179,
+      armedFlightTimeS: 84.739,
+      displayTimeOffsetS: 69.44,
+      flightWindow: {
+        startS: 69.44,
+        endS: 154.179,
+        durationS: 84.739,
+        source: 'vehicle.armed',
+      },
+    }
+    report.chartGroups[0].series[0].points = [
+      [133.20319, 0],
+      [138.2, 1],
+      [143.20319, 1],
+    ]
+    const event = buildEvent()
+    event.timeS = 138.2
+    event.evidenceLinks![0].targetTimeS = 138.2
+    event.evidenceLinks![0].timeWindow = {
+      startS: 135.2,
+      endS: 143.2,
+    }
+
+    const chart = getEvidenceChart(report, event)
+
+    expect(chart).not.toBeNull()
+    expect(chart?.targetTimeS).toBeCloseTo(68.76)
+    expect(chart?.timeOffsetS).toBe(0)
+    expect(chart?.series[0]?.points).toEqual([
+      [63.76319, 0],
+      [68.76, 1],
+      [73.76319, 1],
+    ])
+    expect(getEvidenceDisplayRange(chart!)).toEqual({
+      start: 63.76,
+      end: 73.76,
+    })
+    expect(getEvidenceTimelineRange(chart!)).toEqual({
+      start: 0,
+      end: 84.739,
     })
   })
 

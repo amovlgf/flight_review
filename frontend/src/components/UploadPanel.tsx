@@ -43,6 +43,7 @@ function UploadPanel({
         ref={fileInputRef}
         type="file"
         className="hidden-input"
+        accept=".ulg"
         onChange={handleFileChange}
       />
       <div className="actions">

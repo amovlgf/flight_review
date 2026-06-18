@@ -1541,6 +1541,8 @@ function buildEmptyV11Response(stored, parserError) {
     flightSummary: {
       durationS: null,
       armedFlightTimeS: stored.unlockSummary?.flightTimeS ?? null,
+      displayTimeOffsetS: 0,
+      flightWindow: null,
       unlockCount: null,
     },
     phases: [],
@@ -1572,10 +1574,69 @@ function countRisingEdges(points) {
   return count;
 }
 
+function buildFlightTimeWindow(timeRange, armedPoints) {
+  const logStartS = 0;
+  const logEndS =
+    timeRange && typeof timeRange.endS === 'number' && Number.isFinite(timeRange.endS)
+      ? Number(timeRange.endS)
+      : null;
+
+  if (Array.isArray(armedPoints) && armedPoints.length > 0) {
+    let startS = null;
+    let endS = null;
+
+    for (const point of armedPoints) {
+      const timeS = Number(point?.[0]);
+      const armed = Number(point?.[1]) > 0.5;
+      if (!Number.isFinite(timeS)) continue;
+
+      if (armed && startS === null) {
+        startS = timeS;
+      }
+
+      if (startS !== null && armed) {
+        endS = timeS;
+      }
+
+      if (startS !== null && !armed && timeS >= startS) {
+        endS = timeS;
+        break;
+      }
+    }
+
+    if (startS !== null) {
+      const safeEndS =
+        endS !== null && endS >= startS
+          ? endS
+          : logEndS !== null && logEndS >= startS
+            ? logEndS
+            : startS;
+      return {
+        startS: Number(startS.toFixed(6)),
+        endS: Number(safeEndS.toFixed(6)),
+        durationS: Number(Math.max(0, safeEndS - startS).toFixed(3)),
+        source: 'vehicle.armed',
+      };
+    }
+  }
+
+  if (logEndS !== null) {
+    return {
+      startS: logStartS,
+      endS: Number(logEndS.toFixed(6)),
+      durationS: Number(Math.max(0, logEndS - logStartS).toFixed(3)),
+      source: 'log.timeS',
+    };
+  }
+
+  return null;
+}
+
 function buildFlightSummary(stored, normalized) {
   const timeRange = normalized.timeRange;
   const timePoints = normalized.signals['log.timeS']?.points || [];
   const armedPoints = normalized.signals['vehicle.armed']?.points || [];
+  const flightWindow = buildFlightTimeWindow(timeRange, armedPoints);
   const durationS =
     timeRange && typeof timeRange.endS === 'number'
       ? timeRange.endS
@@ -1586,6 +1647,8 @@ function buildFlightSummary(stored, normalized) {
   return {
     durationS: typeof durationS === 'number' && Number.isFinite(durationS) ? Number(durationS.toFixed(3)) : null,
     armedFlightTimeS: stored.unlockSummary?.flightTimeS ?? null,
+    displayTimeOffsetS: flightWindow?.startS ?? 0,
+    flightWindow,
     unlockCount: countRisingEdges(armedPoints),
   };
 }
@@ -2075,6 +2138,8 @@ function buildChartGroups(normalized) {
   const optionalSeries = [
     'position.altitudeRelative',
     'battery.voltage',
+    'battery.current',
+    'battery.remaining',
     'vehicle.latestDisarmingReason',
     'estimator.primaryInstance',
     'estimator.instanceChangedCount',
@@ -2096,8 +2161,6 @@ function buildChartGroups(normalized) {
     'vehicleCommand.fromExternal',
     'vehicleCommandAck.command',
     'vehicleCommandAck.result',
-    'modeCompleted.navState',
-    'modeCompleted.result',
   ]
     .map((id) => normalized.signals[id])
     .filter(Boolean)

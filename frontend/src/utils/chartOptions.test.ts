@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { buildTopicChartOption, getChartTimeRange } from './chartOptions'
 import type { ModeSegment, TopicChart } from '../types/log'
 
+type TestSeriesOption = {
+  data?: unknown
+  lineStyle?: { width?: number }
+  markArea?: { data?: unknown[] }
+}
+
 const MODE_SEGMENTS: ModeSegment[] = [
   {
     start: 0,
@@ -40,14 +46,15 @@ describe('chartOptions', () => {
     expect(getChartTimeRange(topicChart)).toBe(1)
 
     const option = buildTopicChartOption(topicChart, MODE_SEGMENTS)
+    const series = option.series as TestSeriesOption[]
 
-    expect(option.tooltip).toEqual({ trigger: 'axis' })
+    expect(option.tooltip.trigger).toBe('axis')
     expect(option.toolbox.orient).toBe('vertical')
     expect(option.legend.data).toEqual(['高度 (m)', '速度 (m/s)'])
-    expect(option.xAxis.type).toBe('value')
-    expect(option.yAxis.type).toBe('value')
+    expect(option.xAxis[0].type).toBe('value')
+    expect(option.yAxis[0].type).toBe('value')
     expect(option.dataZoom).toHaveLength(1)
-    expect(option.series).toHaveLength(2)
+    expect(option.series).toHaveLength(3)
     expect(option.series[0]).toMatchObject({
       name: '高度 (m)',
       type: 'line',
@@ -55,8 +62,14 @@ describe('chartOptions', () => {
       showSymbol: false,
       data: topicChart.series[0].points,
     })
-    expect(option.series[0].markArea?.data).toHaveLength(1)
-    expect(option.series[1].markArea).toBeUndefined()
+    expect(series[0].markArea?.data).toHaveLength(1)
+    expect(series[1].markArea).toBeUndefined()
+    expect(option.series[2]).toMatchObject({
+      name: '飞行模式',
+      type: 'custom',
+      xAxisIndex: 1,
+      yAxisIndex: 1,
+    })
   })
 
   it('does not crash on empty series', () => {
@@ -90,10 +103,11 @@ describe('chartOptions', () => {
     expect(getChartTimeRange(topicChart)).toBe(0)
 
     const option = buildTopicChartOption(topicChart, [])
+    const series = option.series as TestSeriesOption[]
 
     expect(option.series).toHaveLength(1)
-    expect(option.series[0]?.data).toEqual([])
-    expect(option.series[0]?.markArea).toBeUndefined()
+    expect(series[0]?.data).toEqual([])
+    expect(series[0]?.markArea).toBeUndefined()
   })
 
   it('skips invalid points without crashing', () => {
@@ -118,9 +132,10 @@ describe('chartOptions', () => {
     expect(getChartTimeRange(topicChart)).toBe(4)
 
     const option = buildTopicChartOption(topicChart, [])
+    const series = option.series as TestSeriesOption[]
 
     expect(option.series).toHaveLength(1)
-    expect(option.series[0]?.data).toEqual([
+    expect(series[0]?.data).toEqual([
       [0, 10],
       [4, 16],
     ])
@@ -165,6 +180,7 @@ describe('chartOptions', () => {
     }
 
     const option = buildTopicChartOption(topicChart, [])
+    const series = option.series as TestSeriesOption[]
 
     expect(option.series[0]).toMatchObject({
       name: 'takeoff.state ()',
@@ -173,6 +189,32 @@ describe('chartOptions', () => {
       showSymbol: true,
       symbol: 'circle',
     })
-    expect(option.series[0]?.lineStyle.width).toBeGreaterThanOrEqual(2.8)
+    expect(series[0]?.lineStyle?.width).toBeGreaterThanOrEqual(2.8)
+  })
+
+  it('can render mode background without the dedicated mode track', () => {
+    const option = buildTopicChartOption(
+      {
+        topic: 'evidence',
+        title: 'Evidence',
+        series: [
+          {
+            name: 'roll',
+            unit: 'deg',
+            points: [
+              [0, 0],
+              [10, 1],
+            ],
+          },
+        ],
+      },
+      MODE_SEGMENTS,
+      { showModeTrack: false },
+    )
+
+    expect(option.xAxis).toHaveLength(1)
+    expect(option.yAxis).toHaveLength(1)
+    expect(option.series).toHaveLength(1)
+    expect((option.series as TestSeriesOption[])[0]?.markArea?.data).toHaveLength(1)
   })
 })

@@ -20,26 +20,48 @@ NAV_STATE_NAME_MAP = {
     12: "AUTO_PRECLAND",
     13: "ORBIT",
     14: "AUTO_VTOL_TAKEOFF",
+    15: "EXTERNAL1",
+    16: "EXTERNAL2",
+    17: "EXTERNAL3",
+    18: "EXTERNAL4",
+    19: "EXTERNAL5",
+    20: "EXTERNAL6",
+    21: "EXTERNAL7",
+    22: "EXTERNAL8",
+    23: "DESCEND",
+    24: "TERMINATION",
 }
 
 NAV_STATE_COLOR_MAP = {
-    "MANUAL": "#f59e0b",
-    "ALTCTL": "#84cc16",
-    "POSCTL": "#22c55e",
-    "AUTO_MISSION": "#0ea5e9",
-    "AUTO_LOITER": "#38bdf8",
-    "AUTO_RTL": "#8b5cf6",
-    "ACRO": "#ef4444",
-    "OFFBOARD": "#14b8a6",
-    "STABILIZED": "#f97316",
-    "AUTO_TAKEOFF": "#10b981",
-    "AUTO_LAND": "#6366f1",
-    "AUTO_FOLLOW_TARGET": "#06b6d4",
-    "AUTO_PRECLAND": "#a855f7",
-    "ORBIT": "#3b82f6",
-    "AUTO_VTOL_TAKEOFF": "#0d9488",
-    "UNKNOWN": "#94a3b8",
+    "MANUAL": "#d62728",
+    "ALTCTL": "#bcbd22",
+    "POSCTL": "#2ca02c",
+    "AUTO_MISSION": "#9467bd",
+    "AUTO_LOITER": "#9467bd",
+    "AUTO_RTL": "#9467bd",
+    "ACRO": "#808000",
+    "OFFBOARD": "#17becf",
+    "STABILIZED": "#1f77b4",
+    "AUTO_TAKEOFF": "#9467bd",
+    "AUTO_LAND": "#9467bd",
+    "AUTO_FOLLOW_TARGET": "#9467bd",
+    "AUTO_PRECLAND": "#9467bd",
+    "ORBIT": "#9467bd",
+    "AUTO_VTOL_TAKEOFF": "#9467bd",
+    "EXTERNAL1": "#e377c2",
+    "EXTERNAL2": "#e377c2",
+    "EXTERNAL3": "#e377c2",
+    "EXTERNAL4": "#e377c2",
+    "EXTERNAL5": "#e377c2",
+    "EXTERNAL6": "#e377c2",
+    "EXTERNAL7": "#e377c2",
+    "EXTERNAL8": "#e377c2",
+    "DESCEND": "#9467bd",
+    "TERMINATION": "#7f7f7f",
+    "UNKNOWN": "#9ca3af",
 }
+
+SHORT_MODE_SEGMENT_THRESHOLD_S = 1.0
 
 PX4_ARMED_STATE_VALUES = {2, 5}
 
@@ -346,14 +368,19 @@ RAW_SIGNAL_TOPIC_NAMES = [
     "estimator_selector_status",
     "estimator_status",
     "estimator_status_flags",
+    "failsafe_flags",
     "mode_completed",
     "position_setpoint_triplet",
     "takeoff_status",
+    "trajectory_setpoint",
     "vehicle_command",
     "vehicle_command_ack",
     "vehicle_land_detected",
     "vehicle_local_position",
+    "vehicle_local_position_setpoint",
     "vehicle_status",
+    "vehicle_visual_odometry",
+    "vehicle_odometry",
 ]
 
 
@@ -649,32 +676,27 @@ def build_mode_segments(vehicle_status_ds):
     current_mode_code = int(nav_states[0])
     current_start = times[0]
 
+    def make_segment(start, end, mode_code):
+        mode_name = NAV_STATE_NAME_MAP.get(mode_code, "UNKNOWN")
+        duration_s = max(0, end - start)
+        return {
+            "start": start,
+            "end": end,
+            "durationS": duration_s,
+            "mode": mode_name,
+            "mode_code": mode_code,
+            "color": NAV_STATE_COLOR_MAP.get(mode_name, NAV_STATE_COLOR_MAP["UNKNOWN"]),
+            "isShortMode": duration_s < SHORT_MODE_SEGMENT_THRESHOLD_S,
+        }
+
     for i in range(1, len(times)):
         mode_code = int(nav_states[i])
         if mode_code != current_mode_code:
-            mode_name = NAV_STATE_NAME_MAP.get(current_mode_code, "UNKNOWN")
-            segments.append(
-                {
-                    "start": current_start,
-                    "end": times[i],
-                    "mode": mode_name,
-                    "mode_code": current_mode_code,
-                    "color": NAV_STATE_COLOR_MAP.get(mode_name, NAV_STATE_COLOR_MAP["UNKNOWN"]),
-                }
-            )
+            segments.append(make_segment(current_start, times[i], current_mode_code))
             current_mode_code = mode_code
             current_start = times[i]
 
-    mode_name = NAV_STATE_NAME_MAP.get(current_mode_code, "UNKNOWN")
-    segments.append(
-        {
-            "start": current_start,
-            "end": times[-1],
-            "mode": mode_name,
-            "mode_code": current_mode_code,
-            "color": NAV_STATE_COLOR_MAP.get(mode_name, NAV_STATE_COLOR_MAP["UNKNOWN"]),
-        }
-    )
+    segments.append(make_segment(current_start, times[-1], current_mode_code))
 
     return segments
 

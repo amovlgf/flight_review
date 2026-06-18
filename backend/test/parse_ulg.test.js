@@ -266,6 +266,49 @@ test('parse_ulg.py reports unlock summary from vehicle_status.arming_state', () 
   );
 });
 
+test('parse_ulg.py builds PX4-style flight mode segments from nav_state', () => {
+  const payload = runParserWithDatasets([
+    {
+      name: 'vehicle_status',
+      data: {
+        timestamp: [0, 500_000, 2_000_000, 3_000_000],
+        nav_state: [0, 15, 15, 24],
+        arming_state: [1, 1, 1, 1],
+      },
+    },
+  ]);
+
+  assert.deepEqual(payload.modeSegments, [
+    {
+      start: 0,
+      end: 0.5,
+      durationS: 0.5,
+      mode: 'MANUAL',
+      mode_code: 0,
+      color: '#d62728',
+      isShortMode: true,
+    },
+    {
+      start: 0.5,
+      end: 3,
+      durationS: 2.5,
+      mode: 'EXTERNAL1',
+      mode_code: 15,
+      color: '#e377c2',
+      isShortMode: false,
+    },
+    {
+      start: 3,
+      end: 3,
+      durationS: 0,
+      mode: 'TERMINATION',
+      mode_code: 24,
+      color: '#7f7f7f',
+      isShortMode: true,
+    },
+  ]);
+});
+
 test('parse_ulg.py can return lightweight unlock summary only', () => {
   const payload = runParserWithDatasets(
     [

@@ -61,8 +61,6 @@ export function getEvidenceChart(
   )
   const focusSeries = matchingSeries[0] ?? group.series[0] ?? null
   const sourceSeries = matchingSeries.length > 0 ? matchingSeries : focusSeries ? [focusSeries] : group.series
-  const startS = link.timeWindow?.startS
-  const endS = link.timeWindow?.endS
 
   const rawSeries = sourceSeries.map((item) => {
     return {
@@ -71,12 +69,29 @@ export function getEvidenceChart(
       points: item.points,
     }
   })
+  const displayTimeOffsetS =
+    typeof report.flightSummary.displayTimeOffsetS === 'number' &&
+    Number.isFinite(report.flightSummary.displayTimeOffsetS)
+      ? report.flightSummary.displayTimeOffsetS
+      : 0
   const localEvidenceTimeS = resolveEvidenceTime(rawSeries, link.targetTimeS)
   const timeOffsetS = link.targetTimeS - localEvidenceTimeS
+  const displayShiftS = timeOffsetS - displayTimeOffsetS
+  const modeTimeOffsetS =
+    displayTimeOffsetS > 0 && localEvidenceTimeS === link.targetTimeS
+      ? 0
+      : displayShiftS
+  const targetTimeS = Number((link.targetTimeS - displayTimeOffsetS).toFixed(6))
+  const startS = typeof link.timeWindow?.startS === 'number'
+    ? Number((link.timeWindow.startS - displayTimeOffsetS).toFixed(6))
+    : undefined
+  const endS = typeof link.timeWindow?.endS === 'number'
+    ? Number((link.timeWindow.endS - displayTimeOffsetS).toFixed(6))
+    : undefined
   const series = rawSeries.map((item) => ({
     ...item,
     points: item.points.map(([timeS, value]) => [
-      Number((timeS + timeOffsetS).toFixed(6)),
+      Number((timeS + displayShiftS).toFixed(6)),
       value,
     ]) as Array<[number, number]>,
   }))
@@ -84,10 +99,17 @@ export function getEvidenceChart(
   return {
     title: group.title,
     source: `${link.source.topic}.${link.source.field}`,
-    targetTimeS: link.targetTimeS,
+    targetTimeS,
+    logTargetTimeS: link.targetTimeS,
+    logDurationS: report.flightSummary.durationS,
+    displayDurationS:
+      report.flightSummary.flightWindow?.durationS ??
+      (displayTimeOffsetS > 0 ? report.flightSummary.armedFlightTimeS : null) ??
+      null,
+    displayTimeOffsetS,
     startS,
     endS,
-    timeOffsetS,
+    timeOffsetS: modeTimeOffsetS,
     focusLabel: focusSeries
       ? `${getSeriesDisplayName(focusSeries.label || focusSeries.id)} (${focusSeries.unit || ''})`
       : link.standardSignal,
@@ -104,11 +126,11 @@ export function getEvidenceDisplayRange(chart: {
   endS?: number
   targetTimeS: number
   series: Array<{ points: Array<[number, number]> }>
-}) {
-  if (isFiniteTime(chart.targetTimeS)) {
+}, centerTimeS = chart.targetTimeS) {
+  if (isFiniteTime(centerTimeS)) {
     return {
-      start: Math.max(0, Number((chart.targetTimeS - EVIDENCE_DISPLAY_WINDOW_BEFORE_S).toFixed(6))),
-      end: Number((chart.targetTimeS + EVIDENCE_DISPLAY_WINDOW_AFTER_S).toFixed(6)),
+      start: Math.max(0, Number((centerTimeS - EVIDENCE_DISPLAY_WINDOW_BEFORE_S).toFixed(6))),
+      end: Number((centerTimeS + EVIDENCE_DISPLAY_WINDOW_AFTER_S).toFixed(6)),
     }
   }
 
@@ -120,6 +142,41 @@ export function getEvidenceDisplayRange(chart: {
   return {
     start: Math.max(0, chart.targetTimeS - 3),
     end: chart.targetTimeS + 5,
+  }
+}
+
+export function getEvidenceTimelineRange(chart: {
+  targetTimeS: number
+  displayDurationS?: number | null
+  logDurationS?: number | null
+  series: Array<{ points: Array<[number, number]> }>
+}) {
+  if (isFiniteTime(chart.displayDurationS) && chart.displayDurationS > 0) {
+    return {
+      start: 0,
+      end: Math.max(chart.displayDurationS, chart.targetTimeS),
+    }
+  }
+
+  if (isFiniteTime(chart.logDurationS) && chart.logDurationS > 0) {
+    return {
+      start: 0,
+      end: Math.max(chart.logDurationS, chart.targetTimeS),
+    }
+  }
+
+  const bounds = getSeriesTimeBounds(chart.series)
+  if (bounds.hasData && bounds.end > bounds.start) {
+    return {
+      start: 0,
+      end: Math.max(bounds.end, chart.targetTimeS),
+    }
+  }
+
+  const displayRange = getEvidenceDisplayRange(chart)
+  return {
+    start: 0,
+    end: displayRange.end,
   }
 }
 

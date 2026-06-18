@@ -122,6 +122,10 @@ function getFileSelectionKey(file: File) {
   return `${file.name}-${file.size}-${file.lastModified}`
 }
 
+function isUlgFile(file: File) {
+  return file.name.toLowerCase().endsWith('.ulg')
+}
+
 function clampPercent(value: number) {
   return Math.min(Math.max(value, 0), 100)
 }
@@ -324,6 +328,11 @@ function App() {
   const handleUpload = async (file: File | null) => {
     if (!file) {
       setStatusText('\u8bf7\u5148\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6\u3002')
+      return
+    }
+
+    if (!isUlgFile(file)) {
+      setStatusText('\u529f\u80fd 1 \u9ed8\u8ba4\u4ec5\u652f\u6301\u4e0a\u4f20 .ulg \u683c\u5f0f\u7684\u65e5\u5fd7\u6587\u4ef6\u3002')
       return
     }
 
@@ -1222,6 +1231,24 @@ function App() {
       }
     }
 
+    const applyDataZoomByValue = (startValue: number, endValue: number) => {
+      if (isChartDisposed(chart)) {
+        return
+      }
+
+      try {
+        chart.dispatchAction({
+          type: 'dataZoom',
+          dataZoomIndex: 0,
+          startValue,
+          endValue,
+        })
+      } catch {
+        chartRegistryRef.current.delete(chartKey)
+        chartCleanupRef.current.delete(chartKey)
+      }
+    }
+
     const resetZoom = () => {
       applyDataZoom(0, 100)
       if (isChartDisposed(chart)) {
@@ -1293,14 +1320,11 @@ function App() {
           return
         }
 
-        const start = timeValueToPercent(
-          Math.min(startTime, endTime),
-          timeRange,
-        )
-        const end = timeValueToPercent(Math.max(startTime, endTime), timeRange)
+        const startValue = Math.min(startTime, endTime)
+        const endValue = Math.max(startTime, endTime)
 
-        if (end - start >= 0.01) {
-          applyDataZoom(start, end)
+        if (endValue - startValue >= 0.001) {
+          applyDataZoomByValue(startValue, endValue)
         }
       } catch {
         chartRegistryRef.current.delete(chartKey)
@@ -1633,6 +1657,9 @@ function App() {
               errorText={incidentAnalysisError}
               onRun={handleRunIncidentAnalysis}
               modeSegments={modeSegments}
+              selectionBox={selectionBox}
+              onChartReady={bindChartInteractions}
+              onChartDispose={handleChartDispose}
               onEventFocus={focusIncidentTimelineEvent}
             />
             <ChartPanel

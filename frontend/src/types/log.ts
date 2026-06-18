@@ -35,9 +35,11 @@ export type Diagnostic = {
 export type ModeSegment = {
   start: number
   end: number
+  durationS?: number
   mode: string
   mode_code: number
   color: string
+  isShortMode?: boolean
 }
 
 export type ChartDataSource =
@@ -462,6 +464,13 @@ export type IncidentAnalysisResponse = {
   flightSummary: {
     durationS: number | null
     armedFlightTimeS: number | null
+    displayTimeOffsetS?: number | null
+    flightWindow?: {
+      startS: number
+      endS: number
+      durationS: number
+      source: string
+    } | null
     unlockCount: number | null
   }
   phases: IncidentFlightPhase[]

@@ -263,6 +263,12 @@ const STANDARD_SIGNAL_SPECS = [
         unit: '',
         transform: (value) => (Number(value) > 0.5 ? 1 : 0),
       },
+      {
+        topic: 'estimator_status_flags',
+        field: 'cs_gps',
+        unit: '',
+        transform: (value) => (Number(value) > 0.5 ? 1 : 0),
+      },
     ],
   },
   {
@@ -509,6 +515,11 @@ const STANDARD_SIGNAL_SPECS = [
       candidates: [
         {
           topic: 'trajectory_setpoint',
+          field: `position[${['x', 'y', 'z'].indexOf(axis)}]`,
+          unit: 'm',
+        },
+        {
+          topic: 'trajectory_setpoint',
           field: axis,
           unit: 'm',
         },
@@ -525,7 +536,17 @@ const STANDARD_SIGNAL_SPECS = [
       candidates: [
         {
           topic: 'vehicle_visual_odometry',
+          field: `position[${['x', 'y', 'z'].indexOf(axis)}]`,
+          unit: 'm',
+        },
+        {
+          topic: 'vehicle_visual_odometry',
           field: axis,
+          unit: 'm',
+        },
+        {
+          topic: 'vehicle_odometry',
+          field: `position[${['x', 'y', 'z'].indexOf(axis)}]`,
           unit: 'm',
         },
         {
@@ -582,28 +603,6 @@ const STANDARD_SIGNAL_SPECS = [
     ],
   },
   {
-    id: 'modeCompleted.navState',
-    required: false,
-    candidates: [
-      {
-        topic: 'mode_completed',
-        field: 'nav_state',
-        unit: '',
-      },
-    ],
-  },
-  {
-    id: 'modeCompleted.result',
-    required: false,
-    candidates: [
-      {
-        topic: 'mode_completed',
-        field: 'result',
-        unit: '',
-      },
-    ],
-  },
-  {
     id: 'position.altitudeRelative',
     required: false,
     candidates: [
@@ -628,6 +627,40 @@ const STANDARD_SIGNAL_SPECS = [
         topic: 'battery_status_0',
         field: 'voltage_v',
         unit: 'V',
+      },
+    ],
+  },
+  {
+    id: 'battery.current',
+    required: false,
+    candidates: [
+      {
+        topic: 'battery_status',
+        field: 'current_a',
+        unit: 'A',
+      },
+      {
+        topic: 'battery_status_0',
+        field: 'current_a',
+        unit: 'A',
+      },
+    ],
+  },
+  {
+    id: 'battery.remaining',
+    required: false,
+    candidates: [
+      {
+        topic: 'battery_status',
+        field: 'remaining',
+        unit: '%',
+        transform: (value) => Number(value) * 100,
+      },
+      {
+        topic: 'battery_status_0',
+        field: 'remaining',
+        unit: '%',
+        transform: (value) => Number(value) * 100,
       },
     ],
   },

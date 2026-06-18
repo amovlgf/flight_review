@@ -35,9 +35,11 @@ export type TopicChart = {
 export type ModeSegment = {
   start: number
   end: number
+  durationS?: number
   mode: string
   mode_code: number
   color: string
+  isShortMode?: boolean
 }
 
 export type ChartSelectionPreview = NormalizedSelectionBox & {

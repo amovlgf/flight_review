@@ -155,6 +155,7 @@ app.post('/api/logs/upload', upload.single('logFile'), (req, res) => {
   const safeOriginalName = decodeUploadedFileName(req.file.originalname);
   const extension = path.extname(safeOriginalName).toLowerCase();
   if (extension !== '.ulg') {
+    removeUploadedTempFile(req.file.path);
     return res.status(400).json({
       message: 'Only .ulg files are supported now.',
       fileName: safeOriginalName,

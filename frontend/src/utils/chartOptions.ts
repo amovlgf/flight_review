@@ -23,6 +23,10 @@ const DEFAULT_CHART_COLORS = [
   '#475569',
 ]
 
+const MODE_BACKGROUND_OPACITY = 0.09
+const MODE_TRACK_HEIGHT = 18
+const SHORT_MODE_SEGMENT_THRESHOLD_S = 1
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -123,6 +127,53 @@ function normalizeSeries(series: unknown): Array<{
   })
 }
 
+function formatDuration(durationS: number) {
+  if (durationS >= 60) {
+    const minutes = Math.floor(durationS / 60)
+    const seconds = Math.round(durationS % 60)
+    return `${minutes}m ${seconds}s`
+  }
+
+  return `${durationS.toFixed(durationS >= 10 ? 1 : 2)}s`
+}
+
+function normalizeModeSegments(modeSegments: unknown): Array<
+  ModeSegment & {
+    durationS: number
+    isShortMode: boolean
+  }
+> {
+  if (!Array.isArray(modeSegments)) {
+    return []
+  }
+
+  return modeSegments
+    .filter(
+      (seg) =>
+        isFiniteNumber(seg?.start) &&
+        isFiniteNumber(seg?.end) &&
+        seg.end >= seg.start,
+    )
+    .map((seg) => {
+      const durationS = isFiniteNumber(seg.durationS)
+        ? seg.durationS
+        : Math.max(0, seg.end - seg.start)
+
+      return {
+        ...seg,
+        mode: typeof seg.mode === 'string' && seg.mode ? seg.mode : 'UNKNOWN',
+        mode_code: isFiniteNumber(seg.mode_code) ? seg.mode_code : -1,
+        color:
+          typeof seg.color === 'string' && seg.color ? seg.color : '#9ca3af',
+        durationS,
+        isShortMode:
+          typeof seg.isShortMode === 'boolean'
+            ? seg.isShortMode
+            : durationS < SHORT_MODE_SEGMENT_THRESHOLD_S,
+      }
+    })
+}
+
 export function getSeriesTimeBounds(
   series: Array<ChartSeriesLike> | null | undefined,
 ): ChartTimeBounds {
@@ -208,23 +259,252 @@ export function getSeriesDisplayName(name: string) {
 export function buildTopicChartOption(
   chart: TopicChart,
   modeSegments: ModeSegment[],
+  options: { showModeTrack?: boolean } = {},
 ) {
   const normalizedSeries = normalizeSeries(chart?.series)
-  const normalizedModeSegments = Array.isArray(modeSegments)
-    ? modeSegments.filter(
-        (seg) =>
-          isFiniteNumber(seg?.start) &&
-          isFiniteNumber(seg?.end) &&
-          seg.end >= seg.start,
-      )
-    : []
+  const normalizedModeSegments = normalizeModeSegments(modeSegments)
   const chartTimeRange = getChartTimeRange({ series: normalizedSeries })
-  const minModeLabelDuration = Math.max(5, chartTimeRange * 0.08)
+  const minModeLabelDuration = Math.max(
+    SHORT_MODE_SEGMENT_THRESHOLD_S,
+    chartTimeRange * 0.06,
+  )
+  const hasModeTrack =
+    options.showModeTrack !== false &&
+    normalizedSeries.length > 0 &&
+    normalizedModeSegments.length > 0
+  const xAxis = [
+    {
+      type: 'value',
+      name: '\u65f6\u95f4 (s)',
+      nameGap: 28,
+      axisLabel: { margin: 12 },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(148, 163, 184, 0.22)',
+        },
+      },
+      axisLine: {
+        lineStyle: {
+          color: '#64748b',
+        },
+      },
+    },
+    ...(hasModeTrack
+      ? [
+          {
+            type: 'value',
+            gridIndex: 1,
+            min: 'dataMin',
+            max: 'dataMax',
+            axisLabel: { show: false },
+            axisTick: { show: false },
+            axisLine: { show: false },
+            splitLine: { show: false },
+          },
+        ]
+      : []),
+  ]
+  const yAxis = [
+    {
+      type: 'value',
+      name: '\u6570\u503c',
+      nameGap: 22,
+      axisLabel: { margin: 10 },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(148, 163, 184, 0.22)',
+        },
+      },
+      axisLine: {
+        lineStyle: {
+          color: '#64748b',
+        },
+      },
+    },
+    ...(hasModeTrack
+      ? [
+          {
+            type: 'value',
+            gridIndex: 1,
+            min: 0,
+            max: 1,
+            axisLabel: { show: false },
+            axisTick: { show: false },
+            axisLine: { show: false },
+            splitLine: { show: false },
+          },
+        ]
+      : []),
+  ]
+  const lineSeries: Array<Record<string, unknown>> = normalizedSeries.map((item, idx) => {
+    const visualStyle = getSeriesVisualStyle(item.name, idx)
+    const isStateSeries = isDiscreteStateSeries(item.name)
+
+    return {
+      name: `${getSeriesDisplayName(item.name)} (${item.unit})`,
+      type: 'line',
+      smooth: false,
+      step: isStateSeries ? ('end' as const) : false,
+      showSymbol: isStateSeries || item.points.length <= 1,
+      symbol: 'circle',
+      symbolSize: item.points.length <= 1 ? 7 : 5,
+      data: item.points,
+      lineStyle: {
+        color: visualStyle.color,
+        width: isStateSeries ? Math.max(visualStyle.width, 2.8) : visualStyle.width,
+        type: visualStyle.type,
+        opacity: visualStyle.opacity,
+      },
+      itemStyle: {
+        color: visualStyle.color,
+      },
+      emphasis: {
+        focus: 'series',
+        lineStyle: {
+          width: visualStyle.width + 0.6,
+        },
+      },
+      markArea:
+        idx === 0 && normalizedModeSegments.length > 0
+          ? {
+              silent: true,
+              label: {
+                show: true,
+                position: 'insideTop',
+                color: '#475569',
+                fontSize: 10,
+                width: 82,
+                overflow: 'truncate',
+              },
+              itemStyle: {
+                opacity: MODE_BACKGROUND_OPACITY,
+              },
+              data: normalizedModeSegments.map((seg) => [
+                {
+                  name:
+                    !seg.isShortMode && seg.durationS >= minModeLabelDuration
+                      ? seg.mode
+                      : '',
+                  xAxis: seg.start,
+                  itemStyle: {
+                    color: seg.color,
+                    opacity: MODE_BACKGROUND_OPACITY,
+                  },
+                },
+                { xAxis: seg.end },
+              ]),
+            }
+          : undefined,
+    }
+  })
+  const modeTrackSeries: Array<Record<string, unknown>> = hasModeTrack
+    ? [
+        {
+          name: '\u98de\u884c\u6a21\u5f0f',
+          type: 'custom',
+          xAxisIndex: 1,
+          yAxisIndex: 1,
+          silent: false,
+          tooltip: {
+            formatter: (params: { data?: unknown }) => {
+              const data = Array.isArray(params.data) ? params.data : []
+              const mode = String(data[2] ?? 'UNKNOWN')
+              const durationS =
+                typeof data[5] === 'number' && Number.isFinite(data[5])
+                  ? data[5]
+                  : Math.max(0, Number(data[1] ?? 0) - Number(data[0] ?? 0))
+              return [
+                `<strong>${mode}</strong>`,
+                `${Number(data[0] ?? 0).toFixed(2)}s - ${Number(
+                  data[1] ?? 0,
+                ).toFixed(2)}s`,
+                `\u6301\u7eed ${formatDuration(durationS)}`,
+                `nav_state: ${String(data[3] ?? '-')}`,
+              ].join('<br/>')
+            },
+          },
+          encode: { x: [0, 1], y: 4 },
+          data: normalizedModeSegments.map((seg) => [
+            seg.start,
+            seg.end,
+            seg.mode,
+            seg.mode_code,
+            0,
+            seg.durationS,
+            seg.color,
+          ]),
+          renderItem: (
+            _params: unknown,
+            api: {
+              value: (index: number) => unknown
+              coord: (value: [number, number]) => [number, number]
+              size: (value: [number, number]) => [number, number]
+              style: (extra?: Record<string, unknown>) => Record<string, unknown>
+            },
+          ) => {
+            const start = Number(api.value(0))
+            const end = Number(api.value(1))
+            const mode = String(api.value(2) ?? 'UNKNOWN')
+            const durationS = Number(api.value(5))
+            const color = String(api.value(6) ?? '#9ca3af')
+            const startPoint = api.coord([start, 0])
+            const endPoint = api.coord([end, 0])
+            const size = api.size([0, 1])
+            const width = Math.max(1, endPoint[0] - startPoint[0])
+            const height = Math.max(MODE_TRACK_HEIGHT, size[1] * 0.8)
+            const showLabel =
+              Number.isFinite(durationS) && durationS >= minModeLabelDuration
+
+            return {
+              type: 'group',
+              children: [
+                {
+                  type: 'rect',
+                  shape: {
+                    x: startPoint[0],
+                    y: startPoint[1] - height / 2,
+                    width,
+                    height,
+                  },
+                  style: api.style({
+                    fill: color,
+                    opacity: 0.88,
+                    stroke: 'rgba(15, 23, 42, 0.16)',
+                    lineWidth: 0.5,
+                  }),
+                },
+                ...(showLabel
+                  ? [
+                      {
+                        type: 'text',
+                        style: {
+                          text: mode,
+                          x: startPoint[0] + Math.min(6, width / 2),
+                          y: startPoint[1],
+                          fill: '#ffffff',
+                          font: '10px sans-serif',
+                          textVerticalAlign: 'middle',
+                          textAlign: 'left',
+                          width: Math.max(0, width - 8),
+                          overflow: 'truncate',
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            }
+          },
+        },
+      ]
+    : []
 
   return {
     backgroundColor: '#ffffff',
     color: DEFAULT_CHART_COLORS,
-    tooltip: { trigger: 'axis' },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+    },
     toolbox: {
       orient: 'vertical',
       right: 8,
@@ -250,105 +530,22 @@ export function buildTopicChartOption(
         (item) => `${getSeriesDisplayName(item.name)} (${item.unit})`,
       ),
     },
-    grid: { left: 56, right: 76, top: 74, bottom: 64 },
-    xAxis: {
-      type: 'value',
-      name: '\u65f6\u95f4 (s)',
-      nameGap: 28,
-      axisLabel: { margin: 12 },
-      splitLine: {
-        lineStyle: {
-          color: 'rgba(148, 163, 184, 0.22)',
-        },
-      },
-      axisLine: {
-        lineStyle: {
-          color: '#64748b',
-        },
-      },
-    },
-    yAxis: {
-      type: 'value',
-      name: '\u6570\u503c',
-      nameGap: 22,
-      axisLabel: { margin: 10 },
-      splitLine: {
-        lineStyle: {
-          color: 'rgba(148, 163, 184, 0.22)',
-        },
-      },
-      axisLine: {
-        lineStyle: {
-          color: '#64748b',
-        },
-      },
-    },
+    grid: hasModeTrack
+      ? [
+          { left: 56, right: 76, top: 74, bottom: 92 },
+          { left: 56, right: 76, bottom: 58, height: MODE_TRACK_HEIGHT },
+        ]
+      : { left: 56, right: 76, top: 74, bottom: 64 },
+    xAxis,
+    yAxis,
     dataZoom: [
       {
         type: 'inside',
-        xAxisIndex: 0,
+        xAxisIndex: hasModeTrack ? [0, 1] : 0,
         filterMode: 'none',
         moveOnMouseMove: false,
       },
     ],
-    series: normalizedSeries.map((item, idx) => {
-      const visualStyle = getSeriesVisualStyle(item.name, idx)
-      const isStateSeries = isDiscreteStateSeries(item.name)
-
-      return {
-        name: `${getSeriesDisplayName(item.name)} (${item.unit})`,
-        type: 'line',
-        smooth: false,
-        step: isStateSeries ? ('end' as const) : false,
-        showSymbol: isStateSeries || item.points.length <= 1,
-        symbol: 'circle',
-        symbolSize: item.points.length <= 1 ? 7 : 5,
-        data: item.points,
-        lineStyle: {
-          color: visualStyle.color,
-          width: isStateSeries ? Math.max(visualStyle.width, 2.8) : visualStyle.width,
-          type: visualStyle.type,
-          opacity: visualStyle.opacity,
-        },
-        itemStyle: {
-          color: visualStyle.color,
-        },
-        emphasis: {
-          focus: 'series',
-          lineStyle: {
-            width: visualStyle.width + 0.6,
-          },
-        },
-        markArea:
-          idx === 0 && normalizedModeSegments.length > 0
-            ? {
-                silent: true,
-                label: {
-                  show: true,
-                  position: 'insideTop',
-                  color: '#334155',
-                  fontSize: 10,
-                  width: 72,
-                  overflow: 'truncate',
-                },
-                itemStyle: {
-                  opacity: 0.08,
-                },
-                data: normalizedModeSegments.map((seg) => [
-                  {
-                    name:
-                      seg.end - seg.start >= minModeLabelDuration ? seg.mode : '',
-                    xAxis: seg.start,
-                    itemStyle: {
-                      color: seg.color || '#94a3b8',
-                      opacity: 0.08,
-                    },
-                  },
-                  { xAxis: seg.end },
-                ]),
-              }
-            : undefined,
-      }
-    }),
+    series: [...lineSeries, ...modeTrackSeries],
   }
 }
