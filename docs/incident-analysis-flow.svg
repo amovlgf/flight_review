@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="980" viewBox="0 0 1200 980" role="img" aria-labelledby="title desc">
+  <title id="title">飞控日志故障分析流程图</title>
+  <desc id="desc">从上传日志、数据质量判断、飞行阶段识别、现象识别，到证据排查、原因收敛和优化建议的诊断流程。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#4a5568" />
+    </marker>
+    <style>
+      .box { rx: 8; stroke-width: 2; }
+      .main { fill: #e9f7ef; stroke: #2f855a; }
+      .detect { fill: #fff8dc; stroke: #b7791f; }
+      .phenomenon { fill: #edf2ff; stroke: #4c6ef5; }
+      .evidence { fill: #f3ecff; stroke: #805ad5; }
+      .result { fill: #fff1f2; stroke: #e11d48; }
+      .label { font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; font-size: 18px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
+      .small { font-size: 16px; font-weight: 600; }
+      .line { fill: none; stroke: #4a5568; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="980" fill="#ffffff" />
+
+  <rect class="box main" x="500" y="40" width="200" height="54" />
+  <text class="label" x="600" y="67">上传日志</text>
+
+  <rect class="box main" x="500" y="124" width="200" height="54" />
+  <text class="label" x="600" y="151">数据质量判断</text>
+
+  <rect class="box main" x="500" y="208" width="200" height="54" />
+  <text class="label" x="600" y="235">飞行阶段识别</text>
+
+  <rect class="box detect" x="500" y="292" width="200" height="54" />
+  <text class="label" x="600" y="319">现象识别</text>
+
+  <rect class="box phenomenon" x="90" y="420" width="150" height="50" />
+  <text class="label small" x="165" y="445">姿态跟踪差</text>
+
+  <rect class="box phenomenon" x="260" y="420" width="150" height="50" />
+  <text class="label small" x="335" y="445">角速度跟踪差</text>
+
+  <rect class="box phenomenon" x="430" y="420" width="150" height="50" />
+  <text class="label small" x="505" y="445">执行器饱和</text>
+
+  <rect class="box phenomenon" x="600" y="420" width="150" height="50" />
+  <text class="label small" x="675" y="445">EKF / GPS 异常</text>
+
+  <rect class="box phenomenon" x="770" y="420" width="150" height="50" />
+  <text class="label small" x="845" y="445">电池电压异常</text>
+
+  <rect class="box phenomenon" x="940" y="420" width="150" height="50" />
+  <text class="label small" x="1015" y="445">日志空中结束</text>
+
+  <rect class="box evidence" x="500" y="550" width="200" height="54" />
+  <text class="label" x="600" y="577">生成可能原因列表</text>
+
+  <rect class="box evidence" x="500" y="634" width="200" height="54" />
+  <text class="label" x="600" y="661">逐项排查相关数据</text>
+
+  <rect class="box evidence" x="475" y="718" width="250" height="54" />
+  <text class="label" x="600" y="745">支持证据 / 反证 / 缺失证据</text>
+
+  <rect class="box result" x="500" y="802" width="200" height="54" />
+  <text class="label" x="600" y="829">收敛为最可能原因</text>
+
+  <rect class="box result" x="500" y="886" width="200" height="54" />
+  <text class="label" x="600" y="913">给出优化建议</text>
+
+  <path class="line" d="M600 94 L600 124" />
+  <path class="line" d="M600 178 L600 208" />
+  <path class="line" d="M600 262 L600 292" />
+
+  <path class="line" d="M600 346 L600 382 L165 382 L165 420" />
+  <path class="line" d="M600 346 L600 382 L335 382 L335 420" />
+  <path class="line" d="M600 346 L600 382 L505 382 L505 420" />
+  <path class="line" d="M600 346 L600 382 L675 382 L675 420" />
+  <path class="line" d="M600 346 L600 382 L845 382 L845 420" />
+  <path class="line" d="M600 346 L600 382 L1015 382 L1015 420" />
+
+  <path class="line" d="M165 470 L165 512 L600 512 L600 550" />
+  <path class="line" d="M335 470 L335 512 L600 512 L600 550" />
+  <path class="line" d="M505 470 L505 512 L600 512 L600 550" />
+  <path class="line" d="M675 470 L675 512 L600 512 L600 550" />
+  <path class="line" d="M845 470 L845 512 L600 512 L600 550" />
+  <path class="line" d="M1015 470 L1015 512 L600 512 L600 550" />
+
+  <path class="line" d="M600 604 L600 634" />
+  <path class="line" d="M600 688 L600 718" />
+  <path class="line" d="M600 772 L600 802" />
+  <path class="line" d="M600 856 L600 886" />
+</svg>

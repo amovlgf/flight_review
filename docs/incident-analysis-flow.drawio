@@ -1,0 +1,112 @@
+<mxfile host="app.diagrams.net" modified="2026-06-25T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="incident-analysis-flow" name="Incident Analysis Flow">
+    <mxGraphModel dx="1300" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="980" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="A" value="上传日志" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e9f7ef;strokeColor=#2f855a;fontColor=#173b2f;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="40" width="200" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="B" value="数据质量判断" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e9f7ef;strokeColor=#2f855a;fontColor=#173b2f;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="124" width="200" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="C" value="飞行阶段识别" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e9f7ef;strokeColor=#2f855a;fontColor=#173b2f;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="208" width="200" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="D" value="现象识别" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8dc;strokeColor=#b7791f;fontColor=#4a3210;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="292" width="200" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="D1" value="姿态跟踪差" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf2ff;strokeColor=#4c6ef5;fontColor=#172554;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="90" y="420" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="D2" value="角速度跟踪差" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf2ff;strokeColor=#4c6ef5;fontColor=#172554;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="260" y="420" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="D3" value="执行器饱和" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf2ff;strokeColor=#4c6ef5;fontColor=#172554;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="430" y="420" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="D4" value="EKF / GPS 异常" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf2ff;strokeColor=#4c6ef5;fontColor=#172554;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="600" y="420" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="D5" value="电池电压异常" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf2ff;strokeColor=#4c6ef5;fontColor=#172554;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="770" y="420" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="D6" value="日志空中结束" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf2ff;strokeColor=#4c6ef5;fontColor=#172554;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="940" y="420" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="E" value="生成可能原因列表" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3ecff;strokeColor=#805ad5;fontColor=#2d1b69;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="550" width="200" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="F" value="逐项排查相关数据" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3ecff;strokeColor=#805ad5;fontColor=#2d1b69;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="634" width="200" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="G" value="支持证据 / 反证 / 缺失证据" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3ecff;strokeColor=#805ad5;fontColor=#2d1b69;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="475" y="718" width="250" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="H" value="收敛为最可能原因" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff1f2;strokeColor=#e11d48;fontColor=#4c0519;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="802" width="200" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="I" value="给出优化建议" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff1f2;strokeColor=#e11d48;fontColor=#4c0519;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="886" width="200" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeAB" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="A" target="B">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeBC" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="B" target="C">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeCD" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="C" target="D">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeDD1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D" target="D1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeDD2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D" target="D2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeDD3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D" target="D3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeDD4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D" target="D4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeDD5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D" target="D5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeDD6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D" target="D6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeD1E" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D1" target="E">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeD2E" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D2" target="E">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeD3E" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D3" target="E">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeD4E" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D4" target="E">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeD5E" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D5" target="E">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeD6E" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="D6" target="E">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeEF" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="E" target="F">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeFG" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="F" target="G">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeGH" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="G" target="H">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edgeHI" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4a5568;endArrow=block;endFill=1;" edge="1" parent="1" source="H" target="I">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

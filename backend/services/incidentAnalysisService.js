@@ -1929,8 +1929,10 @@ function countActiveLocalizationSources(flightProcess) {
 
 function describeLocalizationSources(flightProcess) {
   const activeSources = flightProcess.localizationSources.filter((source) => source.activeIntervals.length > 0);
-  if (activeSources.length === 0) return 'No active localization source interval was decoded.';
-  return `${activeSources.length} localization sources active: ${activeSources.map((source) => source.label).join(', ')}.`;
+  if (activeSources.length === 0) return '未解码到持续融合的定位来源。';
+  const switchCount = activeSources.reduce((count, source) => count + source.changes.length, 0);
+  const switchSummary = switchCount > 0 ? `，检测到 ${switchCount} 次融合开关变化` : '，未检测到融合开关变化';
+  return `${activeSources.length} 个定位来源参与融合：${activeSources.map((source) => source.label).join('、')}${switchSummary}。`;
 }
 
 function describeFailsafeEvents(flightProcess) {

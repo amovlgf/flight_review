@@ -175,6 +175,14 @@ function formatEventTitle(code: string, fallback: string) {
   return eventTitleLabels[code] ?? fallback
 }
 
+function canShowEvidenceChart(event: IncidentTimelineEvent) {
+  return event.code !== 'FLIGHT_PROCESS_LOCALIZATION' && Boolean(event.evidenceLinks?.length)
+}
+
+function shouldHideEvidenceChartControls(event: IncidentTimelineEvent) {
+  return event.code === 'FLIGHT_PROCESS_LOCALIZATION'
+}
+
 function findNearestPoint(
   series: Array<{ points: Array<[number, number]> }>,
   targetTimeS: number,
@@ -519,10 +527,13 @@ function TimelineEventItem({
   onToggleEvidenceChart: (eventId: string) => void
   compact?: boolean
 }) {
+  const hideEvidenceChartControls = shouldHideEvidenceChartControls(event)
+  const showEvidenceChart = canShowEvidenceChart(event)
+
   return (
     <li
       className={`incident-timeline-item incident-event-${event.severity}${
-        event.evidenceLinks?.length ? ' incident-timeline-clickable' : ''
+        showEvidenceChart ? ' incident-timeline-clickable' : ''
       }${compact ? ' incident-timeline-item-compact' : ''}`}
     >
       <time>{formatSeconds(event.timeS)}</time>
@@ -545,7 +556,7 @@ function TimelineEventItem({
           </small>
         ) : null}
         {event.evidence.length > 0 ? <small>{event.evidence.join(', ')}</small> : null}
-        {event.evidenceLinks?.length ? (
+        {hideEvidenceChartControls ? null : showEvidenceChart ? (
           <button
             type="button"
             className="incident-evidence-button"
@@ -557,7 +568,7 @@ function TimelineEventItem({
         ) : (
           <small>暂无可定位图表信号</small>
         )}
-        {expandedEvidenceEventIds.includes(event.id) ? (
+        {showEvidenceChart && expandedEvidenceEventIds.includes(event.id) ? (
           <EventEvidenceChart
             report={report}
             event={event}
