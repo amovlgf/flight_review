@@ -61,3 +61,42 @@ export function isValidSelectionBox(
 
   return Math.max(box.width, box.height) >= threshold
 }
+
+export function isValidTimeSelectionBox(
+  box: NormalizedSelectionBox | null | undefined,
+  minWidthPixels = 5,
+): box is NormalizedSelectionBox {
+  if (!box) {
+    return false
+  }
+
+  const threshold =
+    typeof minWidthPixels === 'number' &&
+    Number.isFinite(minWidthPixels) &&
+    minWidthPixels > 0
+      ? minWidthPixels
+      : 0
+
+  return box.width >= threshold
+}
+
+export function ensureVisibleSelectionBox(
+  box: NormalizedSelectionBox | null | undefined,
+  minPixels = 1,
+): NormalizedSelectionBox | null {
+  if (!box) {
+    return null
+  }
+
+  const minimum =
+    typeof minPixels === 'number' && Number.isFinite(minPixels) && minPixels > 0
+      ? minPixels
+      : 0
+
+  return {
+    left: box.left,
+    top: box.top,
+    width: Math.max(box.width, minimum),
+    height: Math.max(box.height, minimum),
+  }
+}

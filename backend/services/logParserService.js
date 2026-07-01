@@ -148,6 +148,13 @@ function buildDefaultUnlockSummary() {
   };
 }
 
+function buildDefaultParameterProfile() {
+  return {
+    initialParameters: {},
+    changedParameters: [],
+  };
+}
+
 function normalizeUnlockSummary(parsed) {
   if (!parsed || typeof parsed !== 'object') {
     return buildDefaultUnlockSummary();
@@ -169,16 +176,71 @@ function normalizeUnlockSummary(parsed) {
   };
 }
 
+function normalizeParameterProfile(parsed) {
+  if (!parsed || typeof parsed !== 'object') {
+    return buildDefaultParameterProfile();
+  }
+
+  const parameterProfile = parsed.parameterProfile;
+  if (!parameterProfile || typeof parameterProfile !== 'object') {
+    return buildDefaultParameterProfile();
+  }
+
+  const initialParameters = {};
+  const sourceInitial =
+    parameterProfile.initialParameters &&
+    typeof parameterProfile.initialParameters === 'object'
+      ? parameterProfile.initialParameters
+      : {};
+
+  for (const [name, value] of Object.entries(sourceInitial)) {
+    if (typeof name !== 'string') continue;
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) continue;
+    initialParameters[name] = numericValue;
+  }
+
+  const changedParameters = Array.isArray(parameterProfile.changedParameters)
+    ? parameterProfile.changedParameters
+        .map((item) => {
+          const name = typeof item?.name === 'string' ? item.name : '';
+          const value = Number(item?.value);
+          const timeS = Number(item?.timeS);
+          const timestampUs = Number(item?.timestampUs);
+
+          if (!name || !Number.isFinite(value) || !Number.isFinite(timeS)) {
+            return null;
+          }
+
+          return {
+            name,
+            value,
+            timeS,
+            timestampUs: Number.isFinite(timestampUs) ? timestampUs : null,
+          };
+        })
+        .filter(Boolean)
+        .sort((left, right) => left.timeS - right.timeS)
+    : [];
+
+  return {
+    initialParameters,
+    changedParameters,
+  };
+}
+
 function parseOrFallbackSeries(filePath, fallbackSeriesMap, options = {}) {
   let topicCharts = buildFallbackTopicCharts(fallbackSeriesMap);
   let dataSource = 'header-derived-simulated-series';
   let usedTopics = [];
   let modeSegments = [];
   let unlockSummary = buildDefaultUnlockSummary();
+  let parameterProfile = buildDefaultParameterProfile();
 
   try {
     const parsed = parsePx4Series(filePath);
     unlockSummary = normalizeUnlockSummary(parsed);
+    parameterProfile = normalizeParameterProfile(parsed);
     if (parsed && Array.isArray(parsed.topicCharts) && parsed.topicCharts.length > 0) {
       topicCharts = parsed.topicCharts.map((topic) => ({
         topic: typeof topic.topic === 'string' ? topic.topic : 'unknown_topic',
@@ -211,6 +273,7 @@ function parseOrFallbackSeries(filePath, fallbackSeriesMap, options = {}) {
     usedTopics,
     modeSegments,
     unlockSummary,
+    parameterProfile,
     series: topicCharts.flatMap((item) => item.series),
   };
 }
@@ -270,6 +333,7 @@ function buildParsedLog(filePath, fileName, options = {}) {
   const usedTopics = parsedResult.usedTopics;
   const modeSegments = parsedResult.modeSegments;
   const unlockSummary = parsedResult.unlockSummary;
+  const parameterProfile = parsedResult.parameterProfile;
 
   const diagnostics = buildDiagnostics(
     dataSource === 'px4-topics-derived'
@@ -289,6 +353,7 @@ function buildParsedLog(filePath, fileName, options = {}) {
     usedTopics,
     modeSegments,
     unlockSummary,
+    parameterProfile,
     storedPath: filePath,
   };
 }
@@ -312,7 +377,10 @@ function ensureStoredLogParsed(stored) {
     }
   }
 
-  if (stored.storedPath && (!stored.topicCharts || stored.topicCharts.length <= 2)) {
+  if (
+    stored.storedPath &&
+    (!stored.topicCharts || stored.topicCharts.length <= 2 || !stored.parameterProfile)
+  ) {
     const fallbackSeriesMap = generateFallbackTimeSeries(
       stored.metadata,
       buildFallbackSeed(`${stored.fileName}-${stored.logId}`),
@@ -329,6 +397,7 @@ function ensureStoredLogParsed(stored) {
     stored.usedTopics = reparsed.usedTopics;
     stored.modeSegments = reparsed.modeSegments;
     stored.unlockSummary = reparsed.unlockSummary;
+    stored.parameterProfile = reparsed.parameterProfile;
     stored.diagnostics = diagnostics;
   }
 

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  buildIncidentAnalysisV13,
   buildEventGroups,
   buildFlightProcess,
   buildFlightProcessEventGroup,
@@ -419,4 +420,24 @@ test('V1.3 flight process summarizes localization, failsafe, and position compar
   assert.equal(flightProcessGroup?.endTimeS, 25);
   assert.equal(flightProcessGroup?.rawEvents.length, 3);
   assert.ok(flightProcessGroup?.evidenceLinks?.some((link) => link.chartGroupId === 'flight_process_position_comparison'));
+});
+
+test('V3.0 incident analysis keeps a stable response shape when parsing fails', () => {
+  const report = buildIncidentAnalysisV13({
+    logId: 'missing-log',
+    fileName: 'missing.ulg',
+    storedPath: 'missing-file.ulg',
+    unlockSummary: null,
+  });
+
+  assert.equal(report.contractVersion, 'incident-analysis.v3.0');
+  assert.equal(report.anomalySummary.version, 'incident-anomaly.v2.0');
+  assert.equal(report.anomalySummary.status, 'not_available');
+  assert.deepEqual(report.anomalySummary.findings, []);
+  assert.ok(Array.isArray(report.anomalySummary.detectorResults));
+  assert.equal(report.incidentPropagation.version, 'incident-propagation.v3.0');
+  assert.equal(report.incidentPropagation.status, 'no_anomalies');
+  assert.equal(Object.prototype.hasOwnProperty.call(report, 'causeCandidates'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(report, 'report'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(report, 'probability'), false);
 });

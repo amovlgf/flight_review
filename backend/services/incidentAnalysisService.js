@@ -2,8 +2,10 @@ const { randomUUID } = require('crypto');
 const { parsePx4RawSignals } = require('./logParserService');
 const { mapStandardSignals } = require('./px4TopicAdapterService');
 const { evaluateDataQuality } = require('./dataQualityService');
+const { buildAnomalySummary } = require('./incidentAnomalyService');
+const { buildIncidentEvidenceLayer } = require('./incidentEvidenceService');
 
-const CONTRACT_VERSION = 'incident-analysis.v1.3';
+const CONTRACT_VERSION = 'incident-analysis.v3.0';
 const EVENT_EVIDENCE_WINDOW_BEFORE_S = 3;
 const EVENT_EVIDENCE_WINDOW_AFTER_S = 5;
 const STABILITY_WINDOW_S = 0.5;
@@ -1520,6 +1522,13 @@ function buildEmptyV11Response(stored, parserError) {
     parserFailed: true,
     parseError: parserError,
   });
+  const evidenceLayer = buildIncidentEvidenceLayer({
+    anomalySummary: buildAnomalySummary({ signals, analysisCapability, dataQuality }),
+    timeline: [],
+    phases: [],
+    signals,
+    buildEvidenceLinksForEvent,
+  });
 
   return {
     contractVersion: CONTRACT_VERSION,
@@ -1554,6 +1563,8 @@ function buildEmptyV11Response(stored, parserError) {
       positionComparison: [],
       missingSignals: [{ signal: 'log.timeS', label: 'log time' }],
     },
+    anomalySummary: evidenceLayer.anomalySummary,
+    incidentPropagation: evidenceLayer.incidentPropagation,
     chartGroups: [],
     warnings: [
       buildWarning('INCIDENT_ANALYSIS_PARSE_FAILED', 'error', 'ULog raw signal parsing failed.'),
@@ -1676,6 +1687,32 @@ function buildWarnings(dataQuality, missingSignals) {
   }
 
   return warnings;
+}
+
+function attachEvidenceLinksToAnomalySummary(anomalySummary, signals) {
+  if (!anomalySummary || !Array.isArray(anomalySummary.findings)) return anomalySummary;
+
+  const findings = anomalySummary.findings.map((finding) => ({
+    ...finding,
+    evidenceLinks: buildEvidenceLinksForEvent(
+      {
+        id: finding.id,
+        timeS: finding.startTimeS,
+        evidence: finding.evidenceSignals,
+      },
+      signals,
+    ),
+  }));
+  const findingsById = new Map(findings.map((finding) => [finding.id, finding]));
+
+  return {
+    ...anomalySummary,
+    findings,
+    detectorResults: anomalySummary.detectorResults.map((result) => ({
+      ...result,
+      findings: (result.findings || []).map((finding) => findingsById.get(finding.id) || finding),
+    })),
+  };
 }
 
 function signalMeta(signal) {
@@ -2240,6 +2277,21 @@ function buildIncidentAnalysisV13(stored) {
   const flightProcess = buildFlightProcess(normalized);
   const flightProcessGroup = buildFlightProcessEventGroup(normalized.signals, baseEventGroups, flightProcess);
   const eventGroups = mergeFlightProcessEventGroup(baseEventGroups, flightProcessGroup);
+  const anomalySummary = attachEvidenceLinksToAnomalySummary(
+    buildAnomalySummary({
+      signals: normalized.signals,
+      analysisCapability,
+      dataQuality,
+    }),
+    normalized.signals,
+  );
+  const evidenceLayer = buildIncidentEvidenceLayer({
+    anomalySummary,
+    timeline,
+    phases,
+    signals: normalized.signals,
+    buildEvidenceLinksForEvent,
+  });
 
   return {
     contractVersion: CONTRACT_VERSION,
@@ -2254,6 +2306,8 @@ function buildIncidentAnalysisV13(stored) {
     timeline,
     eventGroups,
     flightProcess,
+    anomalySummary: evidenceLayer.anomalySummary,
+    incidentPropagation: evidenceLayer.incidentPropagation,
     chartGroups: buildChartGroups(normalized),
     warnings: buildWarnings(dataQuality, normalized.missingSignals),
     missingSignals: normalized.missingSignals,

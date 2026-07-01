@@ -91,6 +91,45 @@ SETPOINT_EULER_FIELD_CANDIDATES = {
     "yaw": ["yaw_body", "yaw"],
 }
 
+TUNING_PARAMETER_NAMES = [
+    "MC_ROLLRATE_P",
+    "MC_ROLLRATE_I",
+    "MC_ROLLRATE_D",
+    "MC_RR_INT_LIM",
+    "MC_ROLLRATE_FF",
+    "MC_ROLLRATE_K",
+    "MC_PITCHRATE_P",
+    "MC_PITCHRATE_I",
+    "MC_PITCHRATE_D",
+    "MC_PR_INT_LIM",
+    "MC_PITCHRATE_FF",
+    "MC_PITCHRATE_K",
+    "MC_YAWRATE_P",
+    "MC_YAWRATE_I",
+    "MC_YAWRATE_D",
+    "MC_YR_INT_LIM",
+    "MC_YAWRATE_FF",
+    "MC_YAWRATE_K",
+    "MC_ROLL_P",
+    "MC_PITCH_P",
+    "MC_YAW_P",
+    "MC_YAW_WEIGHT",
+    "MC_ROLLRATE_MAX",
+    "MC_PITCHRATE_MAX",
+    "MC_YAWRATE_MAX",
+    "MC_REF_W_N",
+    "MC_REF_FF",
+    "MC_REF_FF_MAX",
+    "MPC_XY_VEL_P_ACC",
+    "MPC_XY_VEL_I_ACC",
+    "MPC_XY_VEL_D_ACC",
+    "MPC_Z_VEL_P_ACC",
+    "MPC_Z_VEL_I_ACC",
+    "MPC_Z_VEL_D_ACC",
+    "MPC_XY_P",
+    "MPC_Z_P",
+]
+
 
 def normalize_time_us(timestamp_array):
     if timestamp_array is None or len(timestamp_array) == 0:
@@ -429,6 +468,56 @@ def normalize_time_us_from_start(timestamp_array, start_us):
             continue
         result.append(round((timestamp - start_us) / 1_000_000.0, 6))
     return result
+
+
+def to_json_number(value):
+    try:
+        numeric_value = float(value)
+    except Exception:
+        return None
+    if math.isnan(numeric_value) or math.isinf(numeric_value):
+        return None
+    return numeric_value
+
+
+def build_parameter_profile(ulog, start_us=None):
+    initial_parameters = {}
+    source_parameters = getattr(ulog, "initial_parameters", {}) or {}
+    for name in TUNING_PARAMETER_NAMES:
+        value = to_json_number(source_parameters.get(name))
+        if value is not None:
+            initial_parameters[name] = value
+
+    changed_parameters = []
+    for item in getattr(ulog, "changed_parameters", []) or []:
+        if len(item) < 3:
+            continue
+        timestamp_us, name, value = item[0], item[1], item[2]
+        if name not in TUNING_PARAMETER_NAMES:
+            continue
+        numeric_value = to_json_number(value)
+        numeric_timestamp = to_json_number(timestamp_us)
+        if numeric_value is None or numeric_timestamp is None:
+            continue
+        if start_us is not None:
+            time_s = (numeric_timestamp - start_us) / 1_000_000.0
+        else:
+            time_s = numeric_timestamp / 1_000_000.0
+        changed_parameters.append(
+            {
+                "timeS": round(time_s, 6),
+                "timestampUs": numeric_timestamp,
+                "name": name,
+                "value": numeric_value,
+            }
+        )
+
+    changed_parameters.sort(key=lambda item: item["timeS"])
+
+    return {
+        "initialParameters": initial_parameters,
+        "changedParameters": changed_parameters,
+    }
 
 
 def serialize_numeric_field(values):
@@ -874,6 +963,11 @@ def main():
 
     mode_segments = build_mode_segments(vehicle_status)
     unlock_summary = build_unlock_summary(vehicle_status, actuator_armed)
+    global_time_range = get_global_time_range(ulog.data_list)
+    parameter_profile = build_parameter_profile(
+        ulog,
+        global_time_range[0] if global_time_range else None,
+    )
 
     if not topic_charts:
         payload = {
@@ -882,6 +976,7 @@ def main():
             "usedTopics": [],
             "modeSegments": mode_segments,
             "unlockSummary": unlock_summary,
+            "parameterProfile": parameter_profile,
         }
         print(json.dumps(payload))
         return
@@ -892,6 +987,7 @@ def main():
         "topicCharts": topic_charts,
         "modeSegments": mode_segments,
         "unlockSummary": unlock_summary,
+        "parameterProfile": parameter_profile,
     }
     print(json.dumps(payload))
 

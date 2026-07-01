@@ -1,6 +1,13 @@
 const LOOP_ORDER = ['actuator', 'rate', 'attitude', 'velocity', 'position'];
 const MIN_ALIGNED_POINTS = 5;
 const EPS = 1e-9;
+const DEFAULT_TUNING_STEP_PERCENT = 5;
+const DEFAULT_PARAMETER_BOUND = Object.freeze({
+  min: 0,
+  max: null,
+  maxStepPercent: DEFAULT_TUNING_STEP_PERCENT,
+});
+const ACTUATOR_SATURATION_BLOCK_THRESHOLD = 0.05;
 
 const REQUIRED_TOPICS = [
   'vehicle_angular_velocity',
@@ -70,6 +77,218 @@ const LOOP_TOPIC_MAP = {
   },
 };
 
+const PARAMETER_TUNING_MAP = {
+  rate: [
+    {
+      axes: ['roll'],
+      label: 'roll',
+      parameters: [
+        { gain: 'P', parameter: 'MC_ROLLRATE_P' },
+        { gain: 'I', parameter: 'MC_ROLLRATE_I' },
+        { gain: 'D', parameter: 'MC_ROLLRATE_D' },
+        {
+          gain: 'INT_LIM',
+          parameter: 'MC_RR_INT_LIM',
+          role: 'integrator_limit',
+          targetable: false,
+        },
+        {
+          gain: 'FF',
+          parameter: 'MC_ROLLRATE_FF',
+          role: 'feed_forward',
+          targetable: false,
+        },
+        {
+          gain: 'K',
+          parameter: 'MC_ROLLRATE_K',
+          role: 'rate_gain_scale',
+          targetable: false,
+        },
+      ],
+    },
+    {
+      axes: ['pitch'],
+      label: 'pitch',
+      parameters: [
+        { gain: 'P', parameter: 'MC_PITCHRATE_P' },
+        { gain: 'I', parameter: 'MC_PITCHRATE_I' },
+        { gain: 'D', parameter: 'MC_PITCHRATE_D' },
+        {
+          gain: 'INT_LIM',
+          parameter: 'MC_PR_INT_LIM',
+          role: 'integrator_limit',
+          targetable: false,
+        },
+        {
+          gain: 'FF',
+          parameter: 'MC_PITCHRATE_FF',
+          role: 'feed_forward',
+          targetable: false,
+        },
+        {
+          gain: 'K',
+          parameter: 'MC_PITCHRATE_K',
+          role: 'rate_gain_scale',
+          targetable: false,
+        },
+      ],
+    },
+    {
+      axes: ['yaw'],
+      label: 'yaw',
+      parameters: [
+        { gain: 'P', parameter: 'MC_YAWRATE_P' },
+        { gain: 'I', parameter: 'MC_YAWRATE_I' },
+        { gain: 'D', parameter: 'MC_YAWRATE_D' },
+        {
+          gain: 'INT_LIM',
+          parameter: 'MC_YR_INT_LIM',
+          role: 'integrator_limit',
+          targetable: false,
+        },
+        {
+          gain: 'FF',
+          parameter: 'MC_YAWRATE_FF',
+          role: 'feed_forward',
+          targetable: false,
+        },
+        {
+          gain: 'K',
+          parameter: 'MC_YAWRATE_K',
+          role: 'rate_gain_scale',
+          targetable: false,
+        },
+      ],
+    },
+  ],
+  attitude: [
+    {
+      axes: ['roll'],
+      label: 'roll',
+      parameters: [
+        { gain: 'P', parameter: 'MC_ROLL_P' },
+        {
+          gain: 'RATE_MAX',
+          parameter: 'MC_ROLLRATE_MAX',
+          role: 'output_limit',
+          targetable: false,
+        },
+      ],
+    },
+    {
+      axes: ['pitch'],
+      label: 'pitch',
+      parameters: [
+        { gain: 'P', parameter: 'MC_PITCH_P' },
+        {
+          gain: 'RATE_MAX',
+          parameter: 'MC_PITCHRATE_MAX',
+          role: 'output_limit',
+          targetable: false,
+        },
+      ],
+    },
+    {
+      axes: ['yaw'],
+      label: 'yaw',
+      parameters: [
+        { gain: 'P', parameter: 'MC_YAW_P' },
+        {
+          gain: 'YAW_WEIGHT',
+          parameter: 'MC_YAW_WEIGHT',
+          role: 'axis_weight',
+          targetable: false,
+        },
+        {
+          gain: 'RATE_MAX',
+          parameter: 'MC_YAWRATE_MAX',
+          role: 'output_limit',
+          targetable: false,
+        },
+      ],
+    },
+    {
+      axes: ['roll', 'pitch', 'yaw'],
+      label: 'reference model',
+      parameters: [
+        {
+          gain: 'REF_W_N',
+          parameter: 'MC_REF_W_N',
+          role: 'reference_model',
+          targetable: false,
+        },
+        {
+          gain: 'REF_FF',
+          parameter: 'MC_REF_FF',
+          role: 'reference_model',
+          targetable: false,
+        },
+        {
+          gain: 'REF_FF_MAX',
+          parameter: 'MC_REF_FF_MAX',
+          role: 'reference_model',
+          targetable: false,
+        },
+      ],
+    },
+  ],
+  velocity: [
+    {
+      axes: ['vx', 'vy'],
+      label: 'vx/vy',
+      parameters: [
+        { gain: 'P', parameter: 'MPC_XY_VEL_P_ACC' },
+        { gain: 'I', parameter: 'MPC_XY_VEL_I_ACC' },
+        { gain: 'D', parameter: 'MPC_XY_VEL_D_ACC' },
+      ],
+    },
+    {
+      axes: ['vz'],
+      label: 'vz',
+      parameters: [
+        { gain: 'P', parameter: 'MPC_Z_VEL_P_ACC' },
+        { gain: 'I', parameter: 'MPC_Z_VEL_I_ACC' },
+        { gain: 'D', parameter: 'MPC_Z_VEL_D_ACC' },
+      ],
+    },
+  ],
+  position: [
+    {
+      axes: ['x', 'y'],
+      label: 'x/y',
+      parameters: [{ gain: 'P', parameter: 'MPC_XY_P' }],
+    },
+    {
+      axes: ['z'],
+      label: 'z',
+      parameters: [{ gain: 'P', parameter: 'MPC_Z_P' }],
+    },
+  ],
+};
+
+const PARAMETER_DESCRIPTIONS = {
+  MC_ROLLRATE_P: '横滚角速度比例增益，影响角速度误差响应强度。',
+  MC_ROLLRATE_I: '横滚角速度积分增益，用于补偿稳态误差和陀螺/力矩偏置。',
+  MC_ROLLRATE_D: '横滚角速度微分增益，用于增加阻尼并抑制快速振荡。',
+  MC_PITCHRATE_P: '俯仰角速度比例增益，影响角速度误差响应强度。',
+  MC_PITCHRATE_I: '俯仰角速度积分增益，用于补偿稳态误差和陀螺/力矩偏置。',
+  MC_PITCHRATE_D: '俯仰角速度微分增益，用于增加阻尼并抑制快速振荡。',
+  MC_YAWRATE_P: '偏航角速度比例增益，影响偏航角速度误差响应强度。',
+  MC_YAWRATE_I: '偏航角速度积分增益，用于补偿偏航稳态误差和偏置。',
+  MC_YAWRATE_D: '偏航角速度微分增益，用于增加偏航阻尼。',
+  MC_ROLL_P: '横滚姿态比例增益，将横滚姿态误差转换为角速度期望。',
+  MC_PITCH_P: '俯仰姿态比例增益，将俯仰姿态误差转换为角速度期望。',
+  MC_YAW_P: '偏航姿态比例增益，将偏航姿态误差转换为角速度期望。',
+  MPC_XY_VEL_P_ACC: '水平速度比例增益，将水平速度误差转换为加速度修正。',
+  MPC_XY_VEL_I_ACC: '水平速度积分增益，用于补偿水平速度稳态误差。',
+  MPC_XY_VEL_D_ACC: '水平速度微分增益，用于增加水平速度环阻尼。',
+  MPC_Z_VEL_P_ACC: '垂直速度比例增益，将垂直速度误差转换为加速度修正。',
+  MPC_Z_VEL_I_ACC: '垂直速度积分增益，用于补偿垂直速度稳态误差。',
+  MPC_Z_VEL_D_ACC: '垂直速度微分增益，用于增加垂直速度环阻尼。',
+  MPC_XY_P: '水平位置比例增益，将水平位置误差转换为水平速度期望。',
+  MPC_Z_P: '垂直位置比例增益，将高度误差转换为垂直速度期望。',
+};
+
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -77,6 +296,305 @@ function isFiniteNumber(value) {
 function roundMetric(value, digits = 6) {
   if (!isFiniteNumber(value)) return null;
   return Number(value.toFixed(digits));
+}
+
+function parseBoundValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseParameterBound(parameterBounds, parameter) {
+  const bound =
+    parameterBounds && typeof parameterBounds === 'object'
+      ? parameterBounds[parameter]
+      : null;
+  if (!bound || typeof bound !== 'object') {
+    return {
+      status: 'valid',
+      source: 'default',
+      value: { ...DEFAULT_PARAMETER_BOUND },
+    };
+  }
+
+  const min = parseBoundValue(bound.min);
+  const max = parseBoundValue(bound.max);
+  const maxStepPercent = parseBoundValue(bound.maxStepPercent);
+  if (min === null && max === null && maxStepPercent === null) {
+    return {
+      status: 'valid',
+      source: 'default',
+      value: { ...DEFAULT_PARAMETER_BOUND },
+    };
+  }
+  if (
+    min === null ||
+    max === null ||
+    maxStepPercent === null ||
+    max < min ||
+    maxStepPercent < 0
+  ) {
+    return { status: 'invalid', value: null };
+  }
+
+  return {
+    status: 'valid',
+    source: 'provided',
+    value: { min, max, maxStepPercent },
+  };
+}
+
+function getCurrentParameterValue(parameterProfile, parameter, endS) {
+  const initialParameters =
+    parameterProfile?.initialParameters &&
+    typeof parameterProfile.initialParameters === 'object'
+      ? parameterProfile.initialParameters
+      : {};
+  const changedParameters = Array.isArray(parameterProfile?.changedParameters)
+    ? parameterProfile.changedParameters
+    : [];
+
+  let current = null;
+  const initialValue = Number(initialParameters[parameter]);
+  if (Number.isFinite(initialValue)) {
+    current = {
+      value: initialValue,
+      source: 'initial',
+      timeS: null,
+    };
+  }
+
+  const effectiveEndS = isFiniteNumber(endS) ? endS : Infinity;
+  for (const item of changedParameters) {
+    if (item?.name !== parameter) continue;
+    const value = Number(item.value);
+    const timeS = Number(item.timeS);
+    if (!Number.isFinite(value) || !Number.isFinite(timeS)) continue;
+    if (timeS - effectiveEndS > EPS) continue;
+    current = {
+      value,
+      source: 'changed',
+      timeS: roundMetric(timeS, 6),
+    };
+  }
+
+  return current;
+}
+
+function maxMetricValue(axisItems, key, absolute = false) {
+  const values = axisItems
+    .map((axis) => axis?.metrics?.[key])
+    .filter(isFiniteNumber)
+    .map((value) => (absolute ? Math.abs(value) : value));
+  if (!values.length) return null;
+  return Math.max(...values);
+}
+
+function summarizeAxisMetrics(loop, axes) {
+  const axisItems = axes
+    .map((axisName) => loop?.axis?.[axisName])
+    .filter((axis) => axis?.status === 'available');
+
+  if (!axisItems.length) {
+    return {
+      status: 'unavailable',
+      nrmse: null,
+      overshootRatio: null,
+      effectiveZeroCrossingRate: null,
+      effectiveZeroCrossingCount: null,
+      delayAbsS: null,
+    };
+  }
+
+  return {
+    status: 'available',
+    nrmse: maxMetricValue(axisItems, 'nrmse'),
+    overshootRatio: maxMetricValue(axisItems, 'overshoot_ratio'),
+    effectiveZeroCrossingRate: maxMetricValue(axisItems, 'effective_zero_crossing_rate'),
+    effectiveZeroCrossingCount: maxMetricValue(axisItems, 'effective_zero_crossing_count'),
+    delayAbsS: maxMetricValue(axisItems, 'delay_s', true),
+  };
+}
+
+function chooseParameterStep(gain, metricSummary) {
+  if (metricSummary.status !== 'available') {
+    return {
+      percent: 0,
+      reason: 'No available loop metrics for this parameter group.',
+    };
+  }
+
+  const nrmse = metricSummary.nrmse ?? 0;
+  const overshootRatio = metricSummary.overshootRatio ?? 0;
+  const zeroCrossingRate = metricSummary.effectiveZeroCrossingRate ?? 0;
+  const zeroCrossingCount = metricSummary.effectiveZeroCrossingCount ?? 0;
+  const delayAbsS = metricSummary.delayAbsS ?? 0;
+  const highOscillation = zeroCrossingRate >= 1.0 || zeroCrossingCount >= 8;
+  const highOvershoot = overshootRatio >= 0.3;
+  const highTrackingError = nrmse >= 0.25;
+  const highDelay = delayAbsS >= 0.15;
+
+  if (highOscillation) {
+    return {
+      percent: -DEFAULT_TUNING_STEP_PERCENT,
+      reason: 'Effective zero-crossing is high, reduce gain conservatively.',
+    };
+  }
+
+  if (highOvershoot) {
+    if (gain === 'D') {
+      return {
+        percent: DEFAULT_TUNING_STEP_PERCENT,
+        reason: 'Overshoot is high without strong oscillation, add damping conservatively.',
+      };
+    }
+    return {
+      percent: -DEFAULT_TUNING_STEP_PERCENT,
+      reason: 'Overshoot is high, reduce gain conservatively.',
+    };
+  }
+
+  if (highTrackingError && highDelay) {
+    if (gain === 'P') {
+      return {
+        percent: DEFAULT_TUNING_STEP_PERCENT,
+        reason: 'Tracking error and delay are high while oscillation is controlled.',
+      };
+    }
+    if (gain === 'I') {
+      return {
+        percent: DEFAULT_TUNING_STEP_PERCENT / 2,
+        reason: 'Tracking error is high; increase integral gain with a smaller step.',
+      };
+    }
+  }
+
+  return {
+    percent: 0,
+    reason: 'No strong metric evidence for changing this parameter.',
+  };
+}
+
+function applyBoundedStep(currentValue, bound, requestedPercent) {
+  if (!Number.isFinite(currentValue) || !bound) return null;
+  const min = Number.isFinite(bound.min) ? bound.min : -Infinity;
+  const max = Number.isFinite(bound.max) ? bound.max : Infinity;
+  const maxStepPercent = Number.isFinite(bound.maxStepPercent)
+    ? bound.maxStepPercent
+    : DEFAULT_TUNING_STEP_PERCENT;
+  const cappedPercentMagnitude = Math.min(
+    Math.abs(requestedPercent),
+    Math.abs(maxStepPercent),
+  );
+  if (cappedPercentMagnitude <= EPS) return null;
+  if (Math.abs(currentValue) <= EPS) return null;
+
+  const effectivePercent = Math.sign(requestedPercent) * cappedPercentMagnitude;
+  const requestedTarget = currentValue * (1 + effectivePercent / 100);
+  const target = Math.min(max, Math.max(min, requestedTarget));
+  const changePercent = ((target - currentValue) / currentValue) * 100;
+  if (!Number.isFinite(changePercent) || Math.abs(changePercent) <= EPS) {
+    return null;
+  }
+
+  return {
+    target,
+    changePercent,
+  };
+}
+
+function buildParameterTarget({
+  current,
+  boundResult,
+  metricSummary,
+  gain,
+  actuatorBlocksIncrease,
+}) {
+  if (!current) {
+    return {
+      status: 'missing_current',
+      targetValue: null,
+      changePercent: null,
+      reason: 'Current parameter value was not found in the log.',
+    };
+  }
+
+  if (boundResult.status === 'missing') {
+    return {
+      status: 'bounds_required',
+      targetValue: null,
+      changePercent: null,
+      reason: 'Fill min, max, and max step percent to generate a target value.',
+    };
+  }
+
+  if (boundResult.status === 'invalid') {
+    return {
+      status: 'invalid_bounds',
+      targetValue: null,
+      changePercent: null,
+      reason: 'Safety bounds are invalid.',
+    };
+  }
+
+  const step = chooseParameterStep(gain, metricSummary);
+  if (step.percent > 0 && actuatorBlocksIncrease) {
+    return {
+      status: 'blocked',
+      targetValue: null,
+      changePercent: null,
+      reason: 'Actuator saturation is high, so gain increases are blocked.',
+    };
+  }
+
+  if (Math.abs(step.percent) <= EPS) {
+    return {
+      status: 'unchanged',
+      targetValue: roundMetric(current.value, 12),
+      changePercent: 0,
+      reason: step.reason,
+    };
+  }
+
+  const boundedStep = applyBoundedStep(
+    current.value,
+    boundResult.value,
+    step.percent,
+  );
+  if (!boundedStep) {
+    return {
+      status: 'unchanged',
+      targetValue: roundMetric(current.value, 12),
+      changePercent: 0,
+      reason: 'Requested change is constrained by the current value or safety bounds.',
+    };
+  }
+
+  return {
+    status: 'target_generated',
+    targetValue: roundMetric(boundedStep.target, 12),
+    changePercent: roundMetric(boundedStep.changePercent, 6),
+    reason: step.reason,
+  };
+}
+
+function buildDisplayOnlyParameterTarget(current) {
+  if (!current) {
+    return {
+      status: 'missing_current',
+      targetValue: null,
+      changePercent: null,
+      reason: 'Current parameter value was not found in the log.',
+    };
+  }
+
+  return {
+    status: 'display_only',
+    targetValue: null,
+    changePercent: null,
+    reason:
+      'Displayed for loop context only; no offline target is generated for this parameter.',
+  };
 }
 
 function normalizeName(name) {
@@ -699,6 +1217,123 @@ function buildHints(report) {
   return hints;
 }
 
+function hasHighActuatorSaturation(loops) {
+  const metrics = loops?.actuator?.metrics || {};
+  const satHighRatio = isFiniteNumber(metrics.sat_high_ratio) ? metrics.sat_high_ratio : 0;
+  const satLowRatio = isFiniteNumber(metrics.sat_low_ratio) ? metrics.sat_low_ratio : 0;
+  return Math.max(satHighRatio, satLowRatio) >= ACTUATOR_SATURATION_BLOCK_THRESHOLD;
+}
+
+function buildLoopParameterTuning({
+  loopName,
+  loop,
+  segment,
+  parameterProfile,
+  parameterBounds,
+  actuatorBlocksIncrease,
+}) {
+  if (loopName === 'actuator') {
+    return {
+      status: 'not_applicable',
+      parameters: [],
+      notes: ['Actuator output has no direct PID parameter mapping.'],
+    };
+  }
+
+  const groups = PARAMETER_TUNING_MAP[loopName] || [];
+  const seenParameters = new Set();
+  const parameters = [];
+
+  for (const group of groups) {
+    const metricSummary = summarizeAxisMetrics(loop, group.axes);
+
+    for (const item of group.parameters) {
+      if (seenParameters.has(item.parameter)) continue;
+      seenParameters.add(item.parameter);
+
+      const current = getCurrentParameterValue(
+        parameterProfile,
+        item.parameter,
+        segment.endS,
+      );
+      const targetable = item.targetable !== false;
+      const boundResult = targetable
+        ? parseParameterBound(parameterBounds, item.parameter)
+        : { status: 'not_applicable', value: null };
+      const target = targetable
+        ? buildParameterTarget({
+            current,
+            boundResult,
+            metricSummary,
+            gain: item.gain,
+            actuatorBlocksIncrease,
+          })
+        : buildDisplayOnlyParameterTarget(current);
+      const currentValue = current ? roundMetric(current.value, 12) : null;
+      const shouldInclude =
+        target.status === 'target_generated' &&
+        isFiniteNumber(currentValue) &&
+        isFiniteNumber(target.targetValue) &&
+        Math.abs(target.targetValue - currentValue) > EPS;
+      if (!shouldInclude) continue;
+
+      parameters.push({
+        loop: loopName,
+        axis: group.label,
+        axes: group.axes,
+        gain: item.gain,
+        role: item.role || 'pid_gain',
+        targetable,
+        parameter: item.parameter,
+        description: item.description || PARAMETER_DESCRIPTIONS[item.parameter] || '',
+        currentValue,
+        currentSource: current?.source || 'missing',
+        currentTimeS: current?.timeS ?? null,
+        bounds:
+          boundResult.status === 'valid' && boundResult.source === 'provided'
+            ? boundResult.value
+            : null,
+        metricSummary,
+        ...target,
+      });
+    }
+  }
+
+  return {
+    status: parameters.length ? 'available' : 'no_recommendation',
+    parameters,
+    notes: [],
+  };
+}
+
+function buildParameterTuning({ loops, segment, parameterProfile, parameterBounds }) {
+  const actuatorBlocksIncrease = hasHighActuatorSaturation(loops);
+  const result = {
+    actuatorBlocksIncrease,
+    loops: {},
+    warnings: [],
+  };
+
+  for (const loopName of LOOP_ORDER) {
+    result.loops[loopName] = buildLoopParameterTuning({
+      loopName,
+      loop: loops[loopName],
+      segment,
+      parameterProfile,
+      parameterBounds,
+      actuatorBlocksIncrease,
+    });
+  }
+
+  if (actuatorBlocksIncrease) {
+    result.warnings.push(
+      'Actuator saturation is high; target generation blocks gain increases.',
+    );
+  }
+
+  return result;
+}
+
 function buildControlQualityReport(stored, options = {}) {
   const topicCharts = Array.isArray(stored?.topicCharts) ? stored.topicCharts : [];
   const usedTopics = (stored?.usedTopics || []).map(String);
@@ -737,6 +1372,12 @@ function buildControlQualityReport(stored, options = {}) {
       main_hints: [],
     },
     loops,
+    parameterTuning: buildParameterTuning({
+      loops,
+      segment,
+      parameterProfile: stored?.parameterProfile,
+      parameterBounds: options.parameterBounds,
+    }),
     estimator_quality: estimatorQuality,
     missing_topics: missingTopics,
     missing_fields: missingFields,

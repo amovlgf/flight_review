@@ -5,7 +5,17 @@ import {
   getEvidenceDisplayRange,
   getEvidenceTimelineRange,
 } from '../utils/incidentEvidenceChart'
-import type { IncidentAnalysisResponse, IncidentTimelineEvent, ModeSegment } from '../types/log'
+import {
+  anomalyFindingToTimelineEvent,
+  evidenceAssessmentToTimelineEvent,
+} from '../utils/incidentAnomalyView'
+import type {
+  IncidentAnalysisResponse,
+  IncidentAnomalyFinding,
+  IncidentEvidenceAssessment,
+  IncidentTimelineEvent,
+  ModeSegment,
+} from '../types/log'
 
 function buildReport(): IncidentAnalysisResponse {
   return {
@@ -208,5 +218,79 @@ describe('IncidentAnalysisPanel evidence chart helpers', () => {
         color: '#bbf7d0',
       },
     ])
+  })
+
+  it('converts V3 anomaly findings and evidence assessments into chartable timeline events', () => {
+    const finding: IncidentAnomalyFinding = {
+      id: 'battery_voltage_drop_10',
+      detectorId: 'battery_voltage_drop',
+      category: 'battery',
+      severity: 'warning',
+      title: 'Large battery voltage drop recorded',
+      summary: 'Battery voltage dropped sharply.',
+      startTimeS: 10,
+      endTimeS: 20,
+      confidence: 'confirmed',
+      evidenceSignals: ['battery.voltage'],
+      missingSignals: ['battery.current'],
+      source: null,
+      thresholds: [],
+      evidenceLinks: [
+        {
+          id: 'battery_voltage_drop_10__battery.voltage',
+          eventId: 'battery_voltage_drop_10',
+          standardSignal: 'battery.voltage',
+          chartGroupId: 'v1_3_optional_signals',
+          seriesId: 'battery.voltage',
+          chartTopic: 'battery_status',
+          targetTimeS: 10,
+          timeWindow: {
+            startS: 7,
+            endS: 15,
+          },
+          source: {
+            topic: 'battery_status',
+            instance: 0,
+            field: 'voltage_v',
+          },
+        },
+      ],
+      supportingEvidence: [],
+      counterEvidence: [],
+      missingEvidence: [],
+      timelineRelation: {
+        phase: 'normal_flight',
+        nearestPreviousEventId: null,
+        nearestNextEventId: null,
+        nearbyEventIds: [],
+        summary: 'No deterministic timeline event is close.',
+      },
+      propagationRole: 'primary_suspect_event',
+      limitations: [],
+    }
+    const evidence: IncidentEvidenceAssessment = {
+      id: 'battery_voltage_drop_10_supporting_signal_battery.voltage',
+      type: 'supporting_signal',
+      signal: 'battery.voltage',
+      timeWindow: {
+        startS: 7,
+        endS: 25,
+      },
+      summary: 'battery.voltage supports this finding.',
+      confidence: 'confirmed',
+      evidenceLinks: finding.evidenceLinks ?? [],
+    }
+
+    expect(anomalyFindingToTimelineEvent(finding)).toMatchObject({
+      id: finding.id,
+      code: 'ANOMALY_BATTERY_VOLTAGE_DROP',
+      evidence: ['battery.voltage'],
+    })
+    expect(evidenceAssessmentToTimelineEvent(finding, evidence)).toMatchObject({
+      id: evidence.id,
+      type: 'supporting_signal',
+      evidence: ['battery.voltage'],
+      evidenceLinks: finding.evidenceLinks,
+    })
   })
 })

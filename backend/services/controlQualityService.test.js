@@ -86,6 +86,11 @@ test('buildControlQualityReport produces position metrics for available fields',
     [3, 3],
     [4, 4],
     [5, 5],
+    [6, 6],
+    [7, 7],
+    [8, 8],
+    [9, 9],
+    [10, 10],
   ];
   const report = buildControlQualityReport({
     fileName: 'sample.ulg',
@@ -122,7 +127,7 @@ test('buildControlQualityReport produces position metrics for available fields',
   }, {
     segment: {
       startS: 0,
-      endS: 5,
+      endS: 10,
       source: 'manual',
     },
   });
@@ -140,6 +145,11 @@ test('buildControlQualityReport accepts suffixed PX4 topics and local position s
     [3, 3],
     [4, 4],
     [5, 5],
+    [6, 6],
+    [7, 7],
+    [8, 8],
+    [9, 9],
+    [10, 10],
   ];
   const shifted = points.map(([time, value]) => [time, value + 0.2]);
   const actuatorPoints = points.map(([time]) => [time, 0.5]);
@@ -204,7 +214,7 @@ test('buildControlQualityReport accepts suffixed PX4 topics and local position s
   }, {
     segment: {
       startS: 0,
-      endS: 5,
+      endS: 10,
       source: 'manual',
     },
   });
@@ -272,4 +282,368 @@ test('control quality charts keep full curves while metrics use the selected seg
   assert.equal(report.loops.rate.charts[0].setpointFeedback.length, 6);
   assert.deepEqual(report.loops.actuator.chart[0].points, actuatorPoints);
   assert.equal(report.loops.actuator.channels[0].sample_count, 5);
+});
+
+test('control quality report generates default-bounded recommendations and omits display-only parameters', () => {
+  const points = [
+    [0, 0],
+    [1, 0],
+    [2, 0],
+    [3, 0],
+    [4, 0],
+    [5, 10],
+    [6, 10],
+    [7, 10],
+    [8, 10],
+    [9, 10],
+    [10, 10],
+  ];
+  const feedback = points.map(([time, value]) => [
+    time,
+    time >= 5 ? value + 2 : value,
+  ]);
+  const report = buildControlQualityReport({
+    fileName: 'params.ulg',
+    usedTopics: [
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: {
+      initialParameters: {
+        MC_ROLLRATE_P: 0.15,
+        MC_ROLLRATE_FF: 0.01,
+      },
+      changedParameters: [],
+    },
+    topicCharts: [
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', points)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', feedback)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+  });
+
+  const rollP = report.parameterTuning.loops.rate.parameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_P',
+  );
+
+  assert.equal(rollP.currentValue, 0.15);
+  assert.equal(rollP.currentSource, 'initial');
+  assert.equal(rollP.status, 'target_generated');
+  assert.equal(rollP.targetValue, 0.1425);
+  assert.equal(rollP.changePercent, -5);
+  assert.match(rollP.description, /横滚角速度比例增益/);
+
+  const rollFf = report.parameterTuning.loops.rate.parameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_FF',
+  );
+
+  assert.equal(rollFf, undefined);
+});
+
+test('control quality report uses latest parameter change before analysis end', () => {
+  const points = [
+    [0, 0],
+    [1, 0],
+    [2, 0],
+    [3, 0],
+    [4, 0],
+    [5, 10],
+    [6, 10],
+    [7, 10],
+    [8, 10],
+    [9, 10],
+    [10, 10],
+  ];
+  const feedback = points.map(([time, value]) => [
+    time,
+    time >= 5 ? value + 2 : value,
+  ]);
+  const report = buildControlQualityReport({
+    fileName: 'changed-param.ulg',
+    usedTopics: [
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: {
+      initialParameters: {
+        MC_ROLLRATE_P: 0.15,
+      },
+      changedParameters: [
+        { name: 'MC_ROLLRATE_P', value: 0.16, timeS: 2 },
+        { name: 'MC_ROLLRATE_P', value: 0.18, timeS: 12 },
+      ],
+    },
+    topicCharts: [
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', points)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', feedback)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+  });
+
+  const rollP = report.parameterTuning.loops.rate.parameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_P',
+  );
+
+  assert.equal(rollP.currentValue, 0.16);
+  assert.equal(rollP.currentSource, 'changed');
+  assert.equal(rollP.currentTimeS, 2);
+  assert.equal(rollP.targetValue, 0.152);
+});
+
+test('control quality report omits display-only attitude context parameters', () => {
+  const report = buildControlQualityReport({
+    fileName: 'attitude-context.ulg',
+    usedTopics: [],
+    parameterProfile: {
+      initialParameters: {
+        MC_YAW_WEIGHT: 0.4,
+        MC_REF_FF: 0.5,
+        MC_ROLLRATE_MAX: 220,
+      },
+      changedParameters: [],
+    },
+    topicCharts: [],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 5,
+      source: 'manual',
+    },
+    parameterBounds: {
+      MC_YAW_WEIGHT: {
+        min: 0,
+        max: 1,
+        maxStepPercent: 5,
+      },
+    },
+  });
+
+  assert.equal(report.parameterTuning.loops.attitude.status, 'no_recommendation');
+  assert.deepEqual(report.parameterTuning.loops.attitude.parameters, []);
+});
+
+test('control quality report generates bounded target values from metrics', () => {
+  const points = [
+    [0, 0],
+    [1, 0],
+    [2, 0],
+    [3, 0],
+    [4, 0],
+    [5, 10],
+    [6, 10],
+    [7, 10],
+    [8, 10],
+    [9, 10],
+    [10, 10],
+  ];
+  const feedback = points.map(([time, value]) => [
+    time,
+    time >= 5 ? value + 2 : value,
+  ]);
+  const report = buildControlQualityReport({
+    fileName: 'target.ulg',
+    usedTopics: [
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: {
+      initialParameters: {
+        MC_ROLLRATE_P: 0.15,
+      },
+      changedParameters: [],
+    },
+    topicCharts: [
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', points)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', feedback)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+    parameterBounds: {
+      MC_ROLLRATE_P: {
+        min: 0.05,
+        max: 0.3,
+        maxStepPercent: 5,
+      },
+    },
+  });
+
+  const rollP = report.parameterTuning.loops.rate.parameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_P',
+  );
+
+  assert.equal(rollP.status, 'target_generated');
+  assert.equal(rollP.targetValue, 0.1425);
+  assert.equal(rollP.changePercent, -5);
+});
+
+test('control quality target generation blocks increases when actuator is saturated', () => {
+  const points = [
+    [0, 0],
+    [1, 0],
+    [2, 0],
+    [3, 0],
+    [4, 0],
+    [5, 10],
+    [6, 10],
+    [7, 10],
+    [8, 10],
+    [9, 10],
+    [10, 10],
+  ];
+  const feedback = points.map(([time, value]) => [
+    time,
+    time >= 5 ? value + 2 : value,
+  ]);
+  const report = buildControlQualityReport({
+    fileName: 'saturated.ulg',
+    usedTopics: [
+      'actuator_motors',
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: {
+      initialParameters: {
+        MC_ROLLRATE_D: 0.003,
+      },
+      changedParameters: [],
+    },
+    topicCharts: [
+      {
+        topic: 'actuator_motors',
+        title: 'actuator_motors',
+        series: [buildSeries('control[0]', points.map(([time]) => [time, 1]))],
+      },
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', points)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', feedback)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+    parameterBounds: {
+      MC_ROLLRATE_D: {
+        min: 0.0005,
+        max: 0.01,
+        maxStepPercent: 8,
+      },
+    },
+  });
+
+  const rollD = report.parameterTuning.loops.rate.parameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_D',
+  );
+
+  assert.equal(report.parameterTuning.actuatorBlocksIncrease, true);
+  assert.equal(rollD, undefined);
+  assert.equal(report.parameterTuning.loops.rate.status, 'no_recommendation');
+});
+
+test('control quality report keeps shared xy parameters unique and validates bounds', () => {
+  const points = [
+    [0, 0],
+    [1, 1],
+    [2, 2],
+    [3, 3],
+    [4, 4],
+    [5, 5],
+  ];
+  const report = buildControlQualityReport({
+    fileName: 'position.ulg',
+    usedTopics: [
+      'vehicle_local_position',
+      'vehicle_local_position_setpoint',
+    ],
+    parameterProfile: {
+      initialParameters: {
+        MPC_XY_P: 0.95,
+      },
+      changedParameters: [],
+    },
+    topicCharts: [
+      {
+        topic: 'vehicle_local_position',
+        title: 'vehicle_local_position',
+        series: [
+          buildSeries('x', points),
+          buildSeries('y', points),
+        ],
+      },
+      {
+        topic: 'vehicle_local_position_setpoint',
+        title: 'vehicle_local_position_setpoint',
+        series: [
+          buildSeries('x', points),
+          buildSeries('y', points),
+        ],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 5,
+      source: 'manual',
+    },
+    parameterBounds: {
+      MPC_XY_P: {
+        min: 2,
+        max: 1,
+        maxStepPercent: 5,
+      },
+    },
+  });
+
+  const xyParameters = report.parameterTuning.loops.position.parameters.filter(
+    (item) => item.parameter === 'MPC_XY_P',
+  );
+
+  assert.equal(xyParameters.length, 0);
+  assert.equal(report.parameterTuning.loops.position.status, 'no_recommendation');
 });

@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "incident-sample-manifest.v1",
+  "scope": "feature-one-incident-analysis-only",
+  "description": "V1.4 starter manifest for manually annotated incident-analysis samples. Entries are placeholders until real .ulg samples are selected.",
+  "samples": [
+    {
+      "id": "normal-flight-001",
+      "fileName": "",
+      "filePath": "",
+      "sampleType": "normal_flight",
+      "status": "placeholder",
+      "regressionUse": "false_positive_baseline",
+      "suitableForRegression": false,
+      "expectedTimelineCodes": [],
+      "expectedAnomalyStatus": "no_critical_detected",
+      "expectedOutcome": "No severe anomaly finding; informational deterministic events are allowed.",
+      "annotationFile": ""
+    },
+    {
+      "id": "ground-test-001",
+      "fileName": "",
+      "filePath": "",
+      "sampleType": "ground_test",
+      "status": "placeholder",
+      "regressionUse": "phase_and_event_baseline",
+      "suitableForRegression": false,
+      "expectedTimelineCodes": [],
+      "expectedAnomalyStatus": "no_critical_detected",
+      "expectedOutcome": "Ground or armed-waiting phases only; no accident conclusion.",
+      "annotationFile": ""
+    },
+    {
+      "id": "armed-flight-001",
+      "fileName": "",
+      "filePath": "",
+      "sampleType": "ordinary_armed_flight",
+      "status": "placeholder",
+      "regressionUse": "timeline_evidence_navigation",
+      "suitableForRegression": false,
+      "expectedTimelineCodes": [],
+      "expectedAnomalyStatus": "no_critical_detected",
+      "expectedOutcome": "Arming, takeoff, landing, disarming, and chart evidence links are traceable.",
+      "annotationFile": ""
+    },
+    {
+      "id": "abnormal-flight-001",
+      "fileName": "",
+      "filePath": "",
+      "sampleType": "abnormal_flight",
+      "status": "placeholder",
+      "regressionUse": "phenomenon_detection",
+      "suitableForRegression": false,
+      "expectedTimelineCodes": [],
+      "expectedAnomalyStatus": "needs_review",
+      "expectedOutcome": "Only confirmed anomaly phenomena are reported before V4; no root cause claim.",
+      "annotationFile": ""
+    }
+  ]
+}

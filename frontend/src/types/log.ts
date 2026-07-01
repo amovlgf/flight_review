@@ -164,6 +164,58 @@ export type ControlQualityLoop = {
   notes?: string[]
 }
 
+export type ControlQualityParameterBound = {
+  min: number | string | null
+  max: number | string | null
+  maxStepPercent: number | string | null
+}
+
+export type ControlQualityParameterTuningStatus =
+  | 'target_generated'
+  | 'bounds_required'
+  | 'invalid_bounds'
+  | 'missing_current'
+  | 'blocked'
+  | 'unchanged'
+  | 'display_only'
+  | string
+
+export type ControlQualityParameterTuningItem = {
+  loop: string
+  axis: string
+  axes: string[]
+  gain: string
+  role?: string
+  targetable?: boolean
+  parameter: string
+  description?: string
+  currentValue: number | null
+  currentSource: 'initial' | 'changed' | 'missing' | string
+  currentTimeS: number | null
+  bounds: {
+    min: number
+    max: number
+    maxStepPercent: number
+  } | null
+  metricSummary: Record<string, number | string | null>
+  status: ControlQualityParameterTuningStatus
+  targetValue: number | null
+  changePercent: number | null
+  reason: string
+}
+
+export type ControlQualityLoopParameterTuning = {
+  status: string
+  parameters: ControlQualityParameterTuningItem[]
+  notes: string[]
+}
+
+export type ControlQualityParameterTuning = {
+  actuatorBlocksIncrease: boolean
+  loops: Record<string, ControlQualityLoopParameterTuning | undefined>
+  warnings: string[]
+}
+
 export type ControlQualityReport = {
   log_file: string
   analysis_time_range: {
@@ -183,6 +235,7 @@ export type ControlQualityReport = {
     velocity?: ControlQualityLoop
     position?: ControlQualityLoop
   }
+  parameterTuning?: ControlQualityParameterTuning
   estimator_quality: Record<string, number | string | null>
   missing_topics: string[]
   missing_fields: Array<{
@@ -201,6 +254,7 @@ export type ControlQualityPayload = {
     endS: number | null
     source?: string
   }
+  parameterBounds?: Record<string, ControlQualityParameterBound>
   format?: 'json' | 'csv'
 }
 
@@ -453,8 +507,146 @@ export type FlightProcessReport = {
   missingSignals: FlightProcessMissingSignal[]
 }
 
+export type IncidentAnomalySeverity =
+  | 'none'
+  | 'info'
+  | 'warning'
+  | 'critical'
+  | string
+
+export type IncidentAnomalyThreshold = {
+  id: string
+  source: 'logged_flag' | 'static' | 'adaptive' | string
+  comparator: string
+  value: number | string | null
+}
+
+export type IncidentAnomalyFinding = {
+  id: string
+  detectorId: string
+  category: string
+  severity: IncidentAnomalySeverity
+  title: string
+  summary: string
+  startTimeS: number
+  endTimeS: number | null
+  confidence: 'confirmed' | 'derived' | 'low' | 'medium' | 'high' | string
+  evidenceSignals: string[]
+  missingSignals: string[]
+  source: {
+    topic: string
+    instance: number
+    field: string
+  } | null
+  thresholds: IncidentAnomalyThreshold[]
+  evidenceLinks?: IncidentEvidenceLink[]
+  supportingEvidence?: IncidentEvidenceAssessment[]
+  counterEvidence?: IncidentEvidenceAssessment[]
+  missingEvidence?: IncidentEvidenceAssessment[]
+  timelineRelation?: {
+    phase: string
+    nearestPreviousEventId: string | null
+    nearestNextEventId: string | null
+    nearbyEventIds: string[]
+    summary: string
+  }
+  propagationRole?:
+    | 'primary_suspect_event'
+    | 'contributing_event'
+    | 'consequence_event'
+    | 'context_event'
+    | 'unknown'
+    | string
+  limitations: string[]
+}
+
+export type IncidentEvidenceAssessment = {
+  id: string
+  type:
+    | 'supporting_signal'
+    | 'nearby_timeline_event'
+    | 'counter_or_context_signal'
+    | 'missing_signal'
+    | string
+  signal: string
+  timeWindow: {
+    startS: number
+    endS: number
+  }
+  summary: string
+  confidence: 'confirmed' | 'derived' | 'low' | 'medium' | 'high' | string
+  evidenceLinks: IncidentEvidenceLink[]
+}
+
+export type IncidentAnomalyDetectorResult = {
+  id: string
+  category: string
+  version: string
+  status:
+    | 'unavailable'
+    | 'not_triggered'
+    | 'triggered'
+    | 'not_run'
+    | string
+  severity: IncidentAnomalySeverity
+  title: string
+  summary: string
+  evidenceSignals: string[]
+  missingSignals: string[]
+  thresholds: IncidentAnomalyThreshold[]
+  findings: IncidentAnomalyFinding[]
+  limitations: string[]
+}
+
+export type IncidentAnomalySummary = {
+  version: string
+  status:
+    | 'not_available'
+    | 'no_critical_detected'
+    | 'needs_review'
+    | string
+  severity: IncidentAnomalySeverity
+  earliestAnomalyTimeS: number | null
+  findings: IncidentAnomalyFinding[]
+  detectorResults: IncidentAnomalyDetectorResult[]
+  limitations: string[]
+}
+
+export type IncidentPropagation = {
+  version: string
+  status: 'built' | 'no_anomalies' | 'not_available' | string
+  events: Array<{
+    id: string
+    findingId: string
+    title: string
+    startTimeS: number
+    endTimeS: number | null
+    severity: IncidentAnomalySeverity
+    role: string
+    phase: string
+    summary: string
+    previousEventId: string | null
+    nextEventId: string | null
+    relatedTimelineEventIds: string[]
+  }>
+  links: Array<{
+    id: string
+    sourceFindingId: string
+    targetFindingId: string
+    relation: 'temporal_sequence' | string
+    confidence: 'low' | 'medium' | 'high' | string
+    summary: string
+  }>
+  limitations: string[]
+}
+
 export type IncidentAnalysisResponse = {
-  contractVersion: 'incident-analysis.v1.3' | 'incident-analysis.v1.2' | string
+  contractVersion:
+    | 'incident-analysis.v3.0'
+    | 'incident-analysis.v2.0'
+    | 'incident-analysis.v1.3'
+    | 'incident-analysis.v1.2'
+    | string
   analysisId: string
   logId: string
   fileName: string
@@ -477,6 +669,8 @@ export type IncidentAnalysisResponse = {
   timeline: IncidentTimelineEvent[]
   eventGroups?: IncidentEventGroup[]
   flightProcess?: FlightProcessReport
+  anomalySummary?: IncidentAnomalySummary
+  incidentPropagation?: IncidentPropagation
   chartGroups: Array<{
     id: string
     title: string

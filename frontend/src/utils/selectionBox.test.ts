@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ensureVisibleSelectionBox,
+  isValidTimeSelectionBox,
   isValidSelectionBox,
   normalizeSelectionBox,
 } from './selectionBox'
@@ -27,10 +29,53 @@ describe('selectionBox', () => {
     })
   })
 
+  it('normalizes a two-click selection from opposite corners', () => {
+    expect(
+      normalizeSelectionBox({ x: 12, y: 45 }, { x: 112, y: 46 }),
+    ).toEqual({
+      left: 12,
+      top: 45,
+      width: 100,
+      height: 1,
+    })
+  })
+
+  it('normalizes a reversed two-click selection from opposite corners', () => {
+    expect(
+      normalizeSelectionBox({ x: 112, y: 46 }, { x: 12, y: 45 }),
+    ).toEqual({
+      left: 12,
+      top: 45,
+      width: 100,
+      height: 1,
+    })
+  })
+
   it('treats a tiny selection as invalid', () => {
     const box = normalizeSelectionBox({ x: 10, y: 10 }, { x: 13, y: 12 })
 
     expect(isValidSelectionBox(box, 5)).toBe(false)
+  })
+
+  it('requires enough x-axis width for time range selection', () => {
+    const tallButNarrowBox = normalizeSelectionBox(
+      { x: 10, y: 10 },
+      { x: 13, y: 120 },
+    )
+
+    expect(isValidSelectionBox(tallButNarrowBox, 5)).toBe(true)
+    expect(isValidTimeSelectionBox(tallButNarrowBox, 5)).toBe(false)
+  })
+
+  it('keeps a very flat selection box visible', () => {
+    const box = normalizeSelectionBox({ x: 10, y: 20 }, { x: 50, y: 20 })
+
+    expect(ensureVisibleSelectionBox(box, 1)).toEqual({
+      left: 10,
+      top: 20,
+      width: 40,
+      height: 1,
+    })
   })
 
   it('never returns a negative width or height for reverse dragging', () => {

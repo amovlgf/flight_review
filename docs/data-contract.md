@@ -254,6 +254,14 @@ type ControlQualityRequest = {
     endS: number | null;
     source?: 'manual' | 'auto' | string;
   };
+  parameterBounds?: Record<
+    string,
+    {
+      min: number | string | null;
+      max: number | string | null;
+      maxStepPercent: number | string | null;
+    }
+  >;
   format?: 'json' | 'csv';
 };
 ```
@@ -283,6 +291,7 @@ type ControlQualityReport = {
     velocity?: ControlQualityLoop;
     position?: ControlQualityLoop;
   };
+  parameterTuning?: ControlQualityParameterTuning;
   estimator_quality: Record<string, number | string | null>;
   missing_topics: string[];
   missing_fields: Array<{
@@ -294,6 +303,62 @@ type ControlQualityReport = {
   warnings: string[];
 };
 ```
+
+`parameterTuning` reports recommended PX4 tuning parameter changes inferred
+from the selected control-loop curves. The backend uses the latest effective
+logged parameter value at the selected analysis range end. When
+`parameterBounds` is omitted for a parameter, the backend uses a conservative
+default step limit of 5% and a default minimum of 0; only parameters with a
+generated target value different from the current value are returned.
+
+```ts
+type ControlQualityParameterTuning = {
+  actuatorBlocksIncrease: boolean;
+  loops: Record<
+    'actuator' | 'rate' | 'attitude' | 'velocity' | 'position' | string,
+    {
+      status: string;
+      parameters: Array<{
+        loop: string;
+        axis: string;
+        axes: string[];
+        gain: string;
+        role?: string;
+        targetable?: boolean;
+        parameter: string;
+        description?: string;
+        currentValue: number | null;
+        currentSource: 'initial' | 'changed' | 'missing' | string;
+        currentTimeS: number | null;
+        bounds: {
+          min: number;
+          max: number;
+          maxStepPercent: number;
+        } | null;
+        targetValue: number | null;
+        changePercent: number | null;
+        status:
+          | 'target_generated'
+          | 'bounds_required'
+          | 'invalid_bounds'
+          | 'missing_current'
+          | 'blocked'
+          | 'unchanged'
+          | 'display_only'
+          | string;
+        reason: string;
+      }>;
+      notes: string[];
+    }
+  >;
+  warnings: string[];
+};
+```
+
+Items with `targetable: false`, unchanged targets, missing current values,
+invalid bounds, and blocked gain increases are omitted from the default
+recommendation list. `description` is intended for frontend tooltips beside
+the parameter name.
 
 For the `actuator` loop, `ControlQualityLoop` also returns `chart`, a list of
 executor output channels for the full available curve. Metric fields and
@@ -390,7 +455,7 @@ single-log `/api/logs/control-quality` endpoint.
 
 ## POST /api/logs/:logId/incident-analysis
 
-V1.3 uses the separate incident-analysis entry point introduced in V1.1. It does not change
+V3.0 uses the separate incident-analysis entry point introduced in V1.1. It does not change
 `POST /api/logs/upload` or `GET /api/logs/chart-data`, and it does not use the
 fallback simulated chart data as accident evidence.
 
@@ -401,15 +466,15 @@ POST /api/logs/:logId/incident-analysis
 Content-Type: application/json
 ```
 
-The V1.3 implementation accepts an empty JSON body. Future versions may use
-`segment`, `detectorProfile`, or AI review flags, but V1.3 does not run AI and
-does not return cause candidates.
+The V3.0 implementation accepts an empty JSON body. Future versions may use
+`segment`, `detectorProfile`, or AI review flags, but V3.0 does not run AI,
+does not return cause candidates, and does not return probability fields.
 
 ### Response
 
 ```ts
-type IncidentAnalysisV13Response = {
-  contractVersion: 'incident-analysis.v1.3';
+type IncidentAnalysisV30Response = {
+  contractVersion: 'incident-analysis.v3.0';
   analysisId: string;
   logId: string;
   fileName: string;
@@ -421,17 +486,32 @@ type IncidentAnalysisV13Response = {
   timeline: IncidentTimelineEvent[];
   eventGroups?: IncidentEventGroup[];
   flightProcess?: FlightProcessReport;
+  anomalySummary: IncidentAnomalySummary;
+  incidentPropagation: IncidentPropagation;
   chartGroups: DiagnosticChartGroup[];
   warnings: AnalysisWarning[];
   missingSignals: MissingSignal[];
 };
 ```
 
-V1.3 covers parsing, unified log time, standard signal availability, data
+V3.0 covers parsing, unified log time, standard signal availability, data
 quality, coarse flight phases, deterministic timeline events, warnings, and
 missing signals. It also adds evidence links so a frontend can jump from a
-timeline event to the relevant chart window. It still does not output root
-causes, hardware fault claims, or accident probabilities.
+timeline event to the relevant chart window. V3.0 additionally enriches
+`anomalySummary.findings[]` with supporting evidence, counter/context evidence,
+missing evidence, timeline relation, and propagation role. It also returns
+`incidentPropagation` for temporal ordering of anomaly phenomena. It still does
+not output root causes, hardware fault claims, cause candidates, AI reports, or
+accident probabilities.
+
+Frontend code should continue to accept older `incident-analysis.v1.3` and
+`incident-analysis.v2.0` responses where V3 fields are absent.
+
+`anomalySummary` is feature-one only. The current V3.0 implementation reports
+detector availability, confirmed logged flags, conservative battery voltage
+drop phenomena, failsafe windows, suspected airborne log end, and V3 evidence
+assessment. It does not infer root causes, hardware failures, or accident
+probability.
 
 ```ts
 type FlightSummary = {
@@ -496,6 +576,121 @@ type IncidentEvidenceLink = {
     instance: number;
     field: string;
   };
+};
+
+type IncidentAnomalySummary = {
+  version: 'incident-anomaly.v2.0' | string;
+  status: 'not_available' | 'no_critical_detected' | 'needs_review' | string;
+  severity: 'none' | 'info' | 'warning' | 'critical' | string;
+  earliestAnomalyTimeS: number | null;
+  findings: IncidentAnomalyFinding[];
+  detectorResults: IncidentAnomalyDetectorResult[];
+  limitations: string[];
+};
+
+type IncidentAnomalyFinding = {
+  id: string;
+  detectorId: string;
+  category: string;
+  severity: 'info' | 'warning' | 'critical' | string;
+  title: string;
+  summary: string;
+  startTimeS: number;
+  endTimeS: number | null;
+  confidence: 'confirmed' | 'derived' | string;
+  evidenceSignals: string[];
+  missingSignals: string[];
+  source: {
+    topic: string;
+    instance: number;
+    field: string;
+  } | null;
+  thresholds: Array<{
+    id: string;
+    source: 'logged_flag' | 'static' | 'adaptive' | string;
+    comparator: string;
+    value: number | string | null;
+  }>;
+  evidenceLinks: IncidentEvidenceLink[];
+  supportingEvidence: IncidentEvidenceAssessment[];
+  counterEvidence: IncidentEvidenceAssessment[];
+  missingEvidence: IncidentEvidenceAssessment[];
+  timelineRelation: {
+    phase: string;
+    nearestPreviousEventId: string | null;
+    nearestNextEventId: string | null;
+    nearbyEventIds: string[];
+    summary: string;
+  };
+  propagationRole:
+    | 'primary_suspect_event'
+    | 'contributing_event'
+    | 'consequence_event'
+    | 'context_event'
+    | 'unknown'
+    | string;
+  limitations: string[];
+};
+
+type IncidentEvidenceAssessment = {
+  id: string;
+  type:
+    | 'supporting_signal'
+    | 'nearby_timeline_event'
+    | 'counter_or_context_signal'
+    | 'missing_signal'
+    | string;
+  signal: string;
+  timeWindow: {
+    startS: number;
+    endS: number;
+  };
+  summary: string;
+  confidence: 'confirmed' | 'derived' | 'low' | 'medium' | 'high' | string;
+  evidenceLinks: IncidentEvidenceLink[];
+};
+
+type IncidentAnomalyDetectorResult = {
+  id: string;
+  category: string;
+  version: string;
+  status: 'unavailable' | 'not_triggered' | 'triggered' | 'not_run' | string;
+  severity: 'info' | 'warning' | 'critical' | string;
+  title: string;
+  summary: string;
+  evidenceSignals: string[];
+  missingSignals: string[];
+  thresholds: IncidentAnomalyFinding['thresholds'];
+  findings: IncidentAnomalyFinding[];
+  limitations: string[];
+};
+
+type IncidentPropagation = {
+  version: 'incident-propagation.v3.0' | string;
+  status: 'built' | 'no_anomalies' | 'not_available' | string;
+  events: Array<{
+    id: string;
+    findingId: string;
+    title: string;
+    startTimeS: number;
+    endTimeS: number | null;
+    severity: 'info' | 'warning' | 'critical' | string;
+    role: string;
+    phase: string;
+    summary: string;
+    previousEventId: string | null;
+    nextEventId: string | null;
+    relatedTimelineEventIds: string[];
+  }>;
+  links: Array<{
+    id: string;
+    sourceFindingId: string;
+    targetFindingId: string;
+    relation: 'temporal_sequence' | string;
+    confidence: 'low' | 'medium' | 'high' | string;
+    summary: string;
+  }>;
+  limitations: string[];
 };
 ```
 

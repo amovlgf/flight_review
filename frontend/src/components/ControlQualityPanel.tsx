@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import ReactECharts from 'echarts-for-react'
 import ChartTimelineScrubber from './ChartTimelineScrubber'
 import type {
+  ControlQualityLoopParameterTuning,
   ControlQualityAxis,
   ControlQualityLoop,
   ControlQualityReport,
@@ -349,6 +350,13 @@ function formatMetric(value: unknown) {
   return '-'
 }
 
+function formatParameterValue(value: number | null | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-'
+  }
+  return value.toFixed(8).replace(/\.?0+$/, '')
+}
+
 function formatRangeInputValue(value: unknown) {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return ''
@@ -572,6 +580,86 @@ function MetricsTable({ axis }: { axis: ControlQualityAxis | null }) {
   return <CollapsibleMetricTable rows={rows} />
 }
 
+function ParameterTuningSection({
+  tuning,
+}: {
+  tuning?: ControlQualityLoopParameterTuning
+}) {
+  const parameters = (tuning?.parameters ?? []).filter(
+    (item) =>
+      item.status === 'target_generated' &&
+      typeof item.currentValue === 'number' &&
+      Number.isFinite(item.currentValue) &&
+      typeof item.targetValue === 'number' &&
+      Number.isFinite(item.targetValue),
+  )
+
+  if (!tuning) {
+    return (
+      <div className="control-parameter-panel">
+        <h5 className="tuning-subtitle">PID 推荐参数</h5>
+        <p className="hint">
+          当前控制环报告还没有参数推荐数据，请重新计算当前区间。
+        </p>
+      </div>
+    )
+  }
+
+  if (parameters.length === 0) {
+    return (
+      <div className="control-parameter-panel">
+        <h5 className="tuning-subtitle">PID 推荐参数</h5>
+        <p className="hint">当前区间未发现需要调整的 PID 参数。</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="control-parameter-panel">
+      <h5 className="tuning-subtitle">PID 推荐参数</h5>
+      <div className="control-parameter-table-wrap">
+        <table className="control-quality-table control-parameter-table">
+          <thead>
+            <tr>
+              <th>参数</th>
+              <th>当前值</th>
+              <th>推荐值</th>
+            </tr>
+          </thead>
+          <tbody>
+            {parameters.map((item) => (
+              <tr key={`${item.loop}-${item.parameter}`}>
+                <th>
+                  <span className="control-parameter-name">
+                    {item.parameter}
+                    {item.description ? (
+                      <span
+                        className="control-parameter-info"
+                        tabIndex={0}
+                        title={item.description}
+                        aria-label={item.description}
+                        data-tooltip={item.description}
+                      >
+                        !
+                      </span>
+                    ) : null}
+                  </span>
+                </th>
+                <td>{formatParameterValue(item.currentValue)}</td>
+                <td>
+                  <span className="control-parameter-target">
+                    {formatParameterValue(item.targetValue)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 function ControlFlowNodes({
   chartKeyPrefix,
   report,
@@ -628,6 +716,7 @@ function ControlLoopCard({
   visibleRange,
   loopName,
   loop,
+  parameterTuning,
   isHighlighted,
   onChartReady,
   onChartDispose,
@@ -642,6 +731,7 @@ function ControlLoopCard({
   visibleRange?: AnalysisRange | null
   loopName: string
   loop: ControlQualityLoop | undefined
+  parameterTuning?: ControlQualityLoopParameterTuning
   isHighlighted: boolean
   onChartReady?: (
     chartKey: string,
@@ -687,6 +777,7 @@ function ControlLoopCard({
         </label>
       ) : null}
       {resolvedAxis ? <MetricsTable axis={resolvedAxis} /> : null}
+      <ParameterTuningSection tuning={parameterTuning} />
       {chart ? (
         <div
           id={getLoopAnchorId(chartKeyPrefix, loopName)}
@@ -738,6 +829,7 @@ function ActuatorSummary({
   isTimelinePlaying,
   visibleRange,
   loop,
+  parameterTuning,
   isHighlighted,
   onChartReady,
   onChartDispose,
@@ -751,6 +843,7 @@ function ActuatorSummary({
   isTimelinePlaying?: boolean
   visibleRange?: AnalysisRange | null
   loop: ControlQualityLoop | undefined
+  parameterTuning?: ControlQualityLoopParameterTuning
   isHighlighted: boolean
   onChartReady?: (
     chartKey: string,
@@ -786,6 +879,7 @@ function ActuatorSummary({
         </span>
       </div>
       <CollapsibleMetricTable rows={rows} />
+      <ParameterTuningSection tuning={parameterTuning} />
       {outputSeries.length > 0 ? (
         <div
           id={getLoopAnchorId(chartKeyPrefix, 'actuator')}
@@ -974,6 +1068,7 @@ function ControlQualityPanel({
               isTimelinePlaying={isTimelinePlaying}
               visibleRange={linkedAnalysisRange}
               loop={report.loops.actuator}
+              parameterTuning={report.parameterTuning?.loops.actuator}
               isHighlighted={highlightedLoop === 'actuator'}
               onChartReady={onChartReady}
               onChartDispose={onChartDispose}
@@ -991,6 +1086,7 @@ function ControlQualityPanel({
                 visibleRange={linkedAnalysisRange}
                 loopName={loopName}
                 loop={report.loops[loopName]}
+                parameterTuning={report.parameterTuning?.loops[loopName]}
                 isHighlighted={highlightedLoop === loopName}
                 onChartReady={onChartReady}
                 onChartDispose={onChartDispose}

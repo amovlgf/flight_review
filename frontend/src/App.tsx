@@ -25,12 +25,14 @@ import {
   uploadLogFile,
 } from './services/api'
 import type {
+  ControlQualityParameterBound,
   ControlQualityReport,
   IncidentAnalysisResponse,
   IncidentTimelineEvent,
 } from './types/log'
 import {
-  isValidSelectionBox,
+  ensureVisibleSelectionBox,
+  isValidTimeSelectionBox,
   normalizeSelectionBox,
 } from './utils/selectionBox'
 
@@ -117,6 +119,8 @@ const PAGE_SIZE = 8
 const TIMELINE_PLAYBACK_SPEED = 1
 const TIMELINE_FINE_STEP_MIN_S = 0.05
 const TIMELINE_FINE_STEP_MAX_S = 1
+const CHART_SELECTION_MIN_WIDTH_PX = 5
+const CHART_SELECTION_MIN_VISUAL_PX = 1
 
 function getFileSelectionKey(file: File) {
   return `${file.name}-${file.size}-${file.lastModified}`
@@ -516,6 +520,7 @@ function App() {
     clientId: string,
     logId: string,
     segment?: { startS: number | null; endS: number | null; source?: string },
+    parameterBounds?: Record<string, ControlQualityParameterBound>,
   ): Promise<boolean> => {
     setControlAnalysisReports((currentItems) =>
       currentItems.map((item) =>
@@ -526,7 +531,11 @@ function App() {
     )
 
     try {
-      const report = await calculateControlQuality({ logId, segment })
+      const report = await calculateControlQuality({
+        logId,
+        segment,
+        parameterBounds,
+      })
       setControlAnalysisReports((currentItems) =>
         currentItems.map((item) =>
           item.clientId === clientId
@@ -1207,9 +1216,13 @@ function App() {
 
     const dom = chart.getDom()
     let isMiddleDragging = false
-    let isLeftSelecting = false
+    let isLeftPointerDown = false
+    let isLeftDragging = false
+    let hasPendingClickSelection = false
     let lastClientX = 0
     let lastMiddleDownAt = 0
+    let pointerDownX = 0
+    let pointerDownY = 0
     let selectStartX = 0
     let selectStartY = 0
 
@@ -1233,7 +1246,7 @@ function App() {
 
     const applyDataZoomByValue = (startValue: number, endValue: number) => {
       if (isChartDisposed(chart)) {
-        return
+        return false
       }
 
       try {
@@ -1243,13 +1256,57 @@ function App() {
           startValue,
           endValue,
         })
+        return true
       } catch {
         chartRegistryRef.current.delete(chartKey)
         chartCleanupRef.current.delete(chartKey)
+        return false
       }
     }
 
+    const getClampedChartPoint = (clientX: number, clientY: number) => {
+      const rect = dom.getBoundingClientRect()
+      return {
+        x: Math.min(Math.max(clientX - rect.left, 0), rect.width),
+        y: Math.min(Math.max(clientY - rect.top, 0), rect.height),
+      }
+    }
+
+    const clearLeftSelectionState = (
+      options: { clearPreview?: boolean } = {},
+    ) => {
+      isLeftPointerDown = false
+      isLeftDragging = false
+      hasPendingClickSelection = false
+      if (options.clearPreview !== false) {
+        clearSelectionPreview(chartKey)
+      }
+    }
+
+    const setSelectionBoxFromNormalized = (
+      normalizedBox: ReturnType<typeof normalizeSelectionBox>,
+    ) => {
+      const visibleBox = ensureVisibleSelectionBox(
+        normalizedBox,
+        CHART_SELECTION_MIN_VISUAL_PX,
+      )
+      if (!visibleBox) {
+        clearSelectionPreview(chartKey)
+        return false
+      }
+
+      setSelectionBox({
+        chartId: chartKey,
+        left: visibleBox.left,
+        top: visibleBox.top,
+        width: visibleBox.width,
+        height: visibleBox.height,
+      })
+      return true
+    }
+
     const resetZoom = () => {
+      clearLeftSelectionState()
       applyDataZoom(0, 100)
       if (isChartDisposed(chart)) {
         return
@@ -1263,46 +1320,49 @@ function App() {
     }
 
     const updateSelectionPreview = (clientX: number, clientY: number) => {
-      const rect = dom.getBoundingClientRect()
-      const currentX = Math.min(Math.max(clientX - rect.left, 0), rect.width)
-      const currentY = Math.min(Math.max(clientY - rect.top, 0), rect.height)
+      const currentPoint = getClampedChartPoint(clientX, clientY)
       const normalizedBox = normalizeSelectionBox(
         { x: selectStartX, y: selectStartY },
-        { x: currentX, y: currentY },
+        currentPoint,
       )
 
-      if (!normalizedBox) {
+      if (
+        !isValidTimeSelectionBox(
+          normalizedBox,
+          CHART_SELECTION_MIN_WIDTH_PX,
+        )
+      ) {
         clearSelectionPreview(chartKey)
         return
       }
 
-      if (!isValidSelectionBox(normalizedBox, 5)) {
-        clearSelectionPreview(chartKey)
-        return
-      }
-
-      setSelectionBox({
-        chartId: chartKey,
-        left: normalizedBox.left,
-        top: normalizedBox.top,
-        width: normalizedBox.width,
-        height: normalizedBox.height,
-      })
+      setSelectionBoxFromNormalized(normalizedBox)
     }
 
     const finishLeftSelection = (clientX: number, clientY: number) => {
-      if (!isLeftSelecting) return
-      const rect = dom.getBoundingClientRect()
-      const endX = Math.min(Math.max(clientX - rect.left, 0), rect.width)
-      const endY = Math.min(Math.max(clientY - rect.top, 0), rect.height)
+      if (
+        !hasPendingClickSelection &&
+        !isLeftPointerDown &&
+        !isLeftDragging
+      ) {
+        return
+      }
+
+      const endPoint = getClampedChartPoint(clientX, clientY)
       const normalizedBox = normalizeSelectionBox(
         { x: selectStartX, y: selectStartY },
-        { x: endX, y: endY },
+        endPoint,
       )
-      isLeftSelecting = false
-      clearSelectionPreview(chartKey)
+      clearLeftSelectionState({ clearPreview: false })
 
-      if (!normalizedBox || normalizedBox.width < 5) {
+      if (
+        normalizedBox === null ||
+        !isValidTimeSelectionBox(
+          normalizedBox,
+          CHART_SELECTION_MIN_WIDTH_PX,
+        )
+      ) {
+        clearSelectionPreview(chartKey)
         return
       }
 
@@ -1317,6 +1377,7 @@ function App() {
           ),
         )
         if (startTime === null || endTime === null) {
+          clearSelectionPreview(chartKey)
           return
         }
 
@@ -1324,30 +1385,43 @@ function App() {
         const endValue = Math.max(startTime, endTime)
 
         if (endValue - startValue >= 0.001) {
-          applyDataZoomByValue(startValue, endValue)
+          const applied = applyDataZoomByValue(startValue, endValue)
+          if (applied) {
+            clearSelectionPreview(chartKey)
+            return
+          }
         }
+        clearSelectionPreview(chartKey)
       } catch {
         chartRegistryRef.current.delete(chartKey)
         chartCleanupRef.current.delete(chartKey)
+        clearSelectionPreview(chartKey)
       }
     }
 
     const onMouseDown = (event: MouseEvent) => {
       activeTimelineChartKeyRef.current = chartKey
       if (event.button === 0) {
-        const rect = dom.getBoundingClientRect()
-        selectStartX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width)
-        selectStartY = Math.min(
-          Math.max(event.clientY - rect.top, 0),
-          rect.height,
-        )
-        isLeftSelecting = true
+        if (hasPendingClickSelection && !isLeftPointerDown) {
+          finishLeftSelection(event.clientX, event.clientY)
+          return
+        }
+
+        const startPoint = getClampedChartPoint(event.clientX, event.clientY)
+        selectStartX = startPoint.x
+        selectStartY = startPoint.y
+        pointerDownX = startPoint.x
+        pointerDownY = startPoint.y
+        isLeftPointerDown = true
+        isLeftDragging = false
+        hasPendingClickSelection = true
         clearSelectionPreview(chartKey)
         return
       }
 
       if (event.button !== 1) return
       event.preventDefault()
+      clearLeftSelectionState()
 
       const now = Date.now()
       if (now - lastMiddleDownAt < 320) {
@@ -1361,8 +1435,20 @@ function App() {
 
     const onMouseMove = (event: MouseEvent) => {
       activeTimelineChartKeyRef.current = chartKey
-      if (isLeftSelecting) {
-        event.preventDefault()
+      if (hasPendingClickSelection || isLeftPointerDown) {
+        if (isLeftPointerDown) {
+          const currentPoint = getClampedChartPoint(event.clientX, event.clientY)
+          const dragDistance = Math.max(
+            Math.abs(currentPoint.x - pointerDownX),
+            Math.abs(currentPoint.y - pointerDownY),
+          )
+          if (dragDistance >= CHART_SELECTION_MIN_WIDTH_PX) {
+            isLeftDragging = true
+          }
+          if (isLeftDragging) {
+            event.preventDefault()
+          }
+        }
         updateSelectionPreview(event.clientX, event.clientY)
       }
 
@@ -1419,7 +1505,12 @@ function App() {
 
     const onMouseUp = (event: MouseEvent) => {
       if (event.button === 0) {
-        finishLeftSelection(event.clientX, event.clientY)
+        if (isLeftPointerDown && isLeftDragging) {
+          finishLeftSelection(event.clientX, event.clientY)
+        } else if (isLeftPointerDown) {
+          isLeftPointerDown = false
+          isLeftDragging = false
+        }
         return
       }
 
@@ -1428,7 +1519,9 @@ function App() {
     }
 
     const onMouseLeave = () => {
-      if (isLeftSelecting) {
+      if (hasPendingClickSelection && !isLeftPointerDown) {
+        clearLeftSelectionState()
+      } else if (isLeftPointerDown) {
         clearSelectionPreview(chartKey)
       }
       clearSyncedChartCursor(chartKey)
@@ -1443,7 +1536,18 @@ function App() {
 
     const onWindowMouseUp = (event: MouseEvent) => {
       if (event.button === 0) {
-        finishLeftSelection(event.clientX, event.clientY)
+        if (isLeftPointerDown && isLeftDragging) {
+          finishLeftSelection(event.clientX, event.clientY)
+        } else if (isLeftPointerDown) {
+          isLeftPointerDown = false
+          isLeftDragging = false
+          if (
+            event.target instanceof Node &&
+            !dom.contains(event.target)
+          ) {
+            clearLeftSelectionState()
+          }
+        }
       } else if (event.button === 1) {
         isMiddleDragging = false
       }
@@ -1469,20 +1573,21 @@ function App() {
       syncChartZoom(chartKey, start, end)
     }
 
-    dom.addEventListener('mousedown', onMouseDown)
-    dom.addEventListener('mousemove', onMouseMove)
-    dom.addEventListener('mouseup', onMouseUp)
-    dom.addEventListener('mouseleave', onMouseLeave)
-    dom.addEventListener('auxclick', onAuxClick)
+    const chartMouseEventOptions = { capture: true }
+    dom.addEventListener('mousedown', onMouseDown, chartMouseEventOptions)
+    dom.addEventListener('mousemove', onMouseMove, chartMouseEventOptions)
+    dom.addEventListener('mouseup', onMouseUp, chartMouseEventOptions)
+    dom.addEventListener('mouseleave', onMouseLeave, chartMouseEventOptions)
+    dom.addEventListener('auxclick', onAuxClick, chartMouseEventOptions)
     window.addEventListener('mouseup', onWindowMouseUp)
     chart.on('datazoom', onDataZoom)
 
     const cleanup = () => {
-      dom.removeEventListener('mousedown', onMouseDown)
-      dom.removeEventListener('mousemove', onMouseMove)
-      dom.removeEventListener('mouseup', onMouseUp)
-      dom.removeEventListener('mouseleave', onMouseLeave)
-      dom.removeEventListener('auxclick', onAuxClick)
+      dom.removeEventListener('mousedown', onMouseDown, chartMouseEventOptions)
+      dom.removeEventListener('mousemove', onMouseMove, chartMouseEventOptions)
+      dom.removeEventListener('mouseup', onMouseUp, chartMouseEventOptions)
+      dom.removeEventListener('mouseleave', onMouseLeave, chartMouseEventOptions)
+      dom.removeEventListener('auxclick', onAuxClick, chartMouseEventOptions)
       window.removeEventListener('mouseup', onWindowMouseUp)
       if (!isChartDisposed(chart)) {
         try {
@@ -1839,7 +1944,11 @@ function App() {
                       }}
                       onToggleTimelinePlayback={toggleTimelinePlayback}
                       onApplyRange={(startS, endS) =>
-                        handleApplyControlQualityRange(item, startS, endS)
+                        handleApplyControlQualityRange(
+                          item,
+                          startS,
+                          endS,
+                        )
                       }
                     />
                   </article>

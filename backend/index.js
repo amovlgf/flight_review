@@ -8,8 +8,8 @@ const {
   buildParsedLog,
   ensureStoredLogParsed,
 } = require('./services/logParserService');
-const { buildIncidentAnalysisV13 } = require('./services/incidentAnalysisService');
 const { hasUnlockedFlight } = require('./services/unlockFlightService');
+const { createIncidentAnalysisRouter } = require('./routes/incidentAnalysis');
 const {
   buildControlQualityReport,
   flattenControlQualityCsv,
@@ -108,6 +108,8 @@ app.use(cors());
 app.use(express.json());
 
 const upload = multer({ dest: 'uploads/' });
+
+app.use(createIncidentAnalysisRouter({ parsedLogStore, ensureStoredLogParsed }));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Backend scaffold is running.' });
@@ -295,33 +297,15 @@ app.get('/api/logs/chart-data', (req, res) => {
   }));
 });
 
-app.post('/api/logs/:logId/incident-analysis', (req, res) => {
-  const logId = typeof req.params.logId === 'string' ? req.params.logId.trim() : '';
-  if (!logId) {
-    return res.status(400).json({
-      message: 'logId is required.',
-      code: 'LOG_ID_REQUIRED',
-    });
-  }
-
-  const stored = parsedLogStore.get(logId);
-  if (!stored) {
-    return res.status(404).json({
-      message: 'Log not found. Please upload first.',
-      code: 'LOG_NOT_FOUND',
-      logId,
-    });
-  }
-
-  ensureStoredLogParsed(stored);
-  return res.json(buildIncidentAnalysisV13(stored));
-});
-
 app.post('/api/logs/control-quality', (req, res) => {
   const logId = typeof req.body?.logId === 'string' ? req.body.logId.trim() : '';
   const segment =
     req.body?.segment && typeof req.body.segment === 'object'
       ? req.body.segment
+      : undefined;
+  const parameterBounds =
+    req.body?.parameterBounds && typeof req.body.parameterBounds === 'object'
+      ? req.body.parameterBounds
       : undefined;
   const format =
     typeof req.body?.format === 'string' ? req.body.format.trim().toLowerCase() : 'json';
@@ -341,7 +325,7 @@ app.post('/api/logs/control-quality', (req, res) => {
   }
 
   ensureStoredLogParsed(stored);
-  const report = buildControlQualityReport(stored, { segment });
+  const report = buildControlQualityReport(stored, { segment, parameterBounds });
 
   if (format === 'csv') {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');

@@ -12,12 +12,20 @@ const PARSER_SCRIPT = path.join(
   'parse_ulg.py',
 );
 
-function writeFakePyulogModule(tempDir, datasets) {
+function writeFakePyulogModule(tempDir, datasets, options = {}) {
   const serializedDatasets = JSON.stringify(datasets);
+  const serializedInitialParameters = JSON.stringify(
+    options.initialParameters || {},
+  );
+  const serializedChangedParameters = JSON.stringify(
+    options.changedParameters || [],
+  );
   const moduleSource = `
 import json
 
 _DATASETS = json.loads(${JSON.stringify(serializedDatasets)})
+_INITIAL_PARAMETERS = json.loads(${JSON.stringify(serializedInitialParameters)})
+_CHANGED_PARAMETERS = json.loads(${JSON.stringify(serializedChangedParameters)})
 
 class _Dataset:
     def __init__(self, item):
@@ -29,15 +37,17 @@ class _Dataset:
 class ULog:
     def __init__(self, file_path, message_name_filter_list=None):
         self.data_list = [_Dataset(item) for item in _DATASETS]
+        self.initial_parameters = _INITIAL_PARAMETERS
+        self.changed_parameters = [tuple(item) for item in _CHANGED_PARAMETERS]
 `;
 
   fs.writeFileSync(path.join(tempDir, 'pyulog.py'), moduleSource, 'utf8');
 }
 
-function runParserWithDatasets(datasets, parserArgs = []) {
+function runParserWithDatasets(datasets, parserArgs = [], options = {}) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'log-dev-pyulog-'));
   try {
-    writeFakePyulogModule(tempDir, datasets);
+    writeFakePyulogModule(tempDir, datasets, options);
 
     const dummyLogPath = path.join(tempDir, 'dummy.ulg');
     fs.writeFileSync(dummyLogPath, 'dummy', 'utf8');
@@ -361,4 +371,54 @@ test('parse_ulg.py raw signals mode uses one global log time axis', () => {
   assert.deepEqual(batteryTopic.timeS, [2, 3]);
   assert.deepEqual(statusTopic.fields.arming_state, [1, 2]);
   assert.deepEqual(batteryTopic.fields.voltage_v, [16.2, 15.9]);
+});
+
+test('parse_ulg.py extracts tuning parameters and normalizes change times', () => {
+  const payload = runParserWithDatasets(
+    [
+      {
+        name: 'vehicle_rates_setpoint',
+        data: {
+          timestamp: [1_000_000, 2_000_000, 3_000_000],
+          roll: [0, 1, 2],
+        },
+      },
+    ],
+    [],
+    {
+      initialParameters: {
+        MC_ROLLRATE_P: 0.15,
+        MC_ROLLRATE_I: 0.2,
+        MC_ROLLRATE_FF: 0.01,
+        MC_REF_FF: 0.5,
+        UNRELATED_PARAM: 99,
+      },
+      changedParameters: [
+        [3_500_000, 'MC_ROLLRATE_P', 0.16],
+        [3_750_000, 'MC_YAW_WEIGHT', 0.4],
+        [4_000_000, 'UNRELATED_PARAM', 100],
+      ],
+    },
+  );
+
+  assert.deepEqual(payload.parameterProfile.initialParameters, {
+    MC_ROLLRATE_P: 0.15,
+    MC_ROLLRATE_I: 0.2,
+    MC_ROLLRATE_FF: 0.01,
+    MC_REF_FF: 0.5,
+  });
+  assert.deepEqual(payload.parameterProfile.changedParameters, [
+    {
+      timeS: 2.5,
+      timestampUs: 3_500_000,
+      name: 'MC_ROLLRATE_P',
+      value: 0.16,
+    },
+    {
+      timeS: 2.75,
+      timestampUs: 3_750_000,
+      name: 'MC_YAW_WEIGHT',
+      value: 0.4,
+    },
+  ]);
 });
