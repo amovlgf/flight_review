@@ -1,4 +1,6 @@
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import IncidentAnalysisPanel from './IncidentAnalysisPanel'
 import {
   alignModeSegmentsToEvidenceTime,
   getEvidenceChart,
@@ -50,6 +52,22 @@ function buildReport(): IncidentAnalysisResponse {
     },
     phases: [],
     timeline: [],
+    anomalySummary: {
+      version: 'incident-anomaly.v2.0',
+      status: 'no_critical_detected',
+      severity: 'none',
+      earliestAnomalyTimeS: null,
+      findings: [],
+      detectorResults: [],
+      limitations: [],
+    },
+    incidentPropagation: {
+      version: 'incident-propagation.v3.0',
+      status: 'no_anomalies',
+      events: [],
+      links: [],
+      limitations: [],
+    },
     chartGroups: [
       {
         id: 'v1_3_state_signals',
@@ -116,6 +134,29 @@ function buildEvent(): IncidentTimelineEvent {
 }
 
 describe('IncidentAnalysisPanel evidence chart helpers', () => {
+  it('presents feature one as routine log analysis without version-centric section titles', () => {
+    const html = renderToStaticMarkup(
+      <IncidentAnalysisPanel
+        selectedLogId="log-1"
+        report={buildReport()}
+        isLoading={false}
+        errorText=""
+        onRun={() => {}}
+      />,
+    )
+
+    expect(html).toContain('功能 1：常规日志分析')
+    expect(html).toContain('日志概览')
+    expect(html).toContain('异常提示')
+    expect(html).toContain('证据关系')
+    expect(html).toContain('飞行事件时间线')
+    expect(html).toContain('高级诊断细节')
+    expect(html).not.toContain('功能 1 V1.3')
+    expect(html).not.toContain('运行 V1.3 分析')
+    expect(html).not.toContain('V2 异常检测框架')
+    expect(html).not.toContain('V3 异常传播链')
+  })
+
   it('aligns local evidence series to the absolute event time window', () => {
     const chart = getEvidenceChart(buildReport(), buildEvent())
 

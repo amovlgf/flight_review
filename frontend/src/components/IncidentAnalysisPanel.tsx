@@ -113,12 +113,12 @@ const warningMessageLabels: Record<string, string> = {
   'ULog raw signal parsing failed.': 'ULog 原始信号解析失败。',
   'Incident analysis cannot run without valid parsed log data.':
     '缺少有效解析结果，无法运行日志质量检查。',
-  'The log is missing required V1.1 signals.': '该日志缺少 V1.1 必需信号。',
-  'The log is missing required V1.2 signals.': '该日志缺少 V1.2 必需信号。',
-  'The log is missing required V1.3 signals.': '该日志缺少 V1.3 必需信号。',
-  'Some optional V1.1 signals are unavailable.': '部分 V1.1 可选信号不可用。',
-  'Some optional V1.2 signals are unavailable.': '部分 V1.2 可选信号不可用。',
-  'Some optional V1.3 signals are unavailable.': '部分 V1.3 可选信号不可用。',
+  'The log is missing required V1.1 signals.': '该日志缺少必需信号。',
+  'The log is missing required V1.2 signals.': '该日志缺少必需信号。',
+  'The log is missing required V1.3 signals.': '该日志缺少必需信号。',
+  'Some optional V1.1 signals are unavailable.': '部分可选信号不可用。',
+  'Some optional V1.2 signals are unavailable.': '部分可选信号不可用。',
+  'Some optional V1.3 signals are unavailable.': '部分可选信号不可用。',
 }
 
 const missingReasonLabels: Record<string, string> = {
@@ -749,9 +749,9 @@ function IncidentAnalysisPanel({
     <section className="incident-panel">
       <div className="incident-panel-head">
         <div>
-          <h3>功能 1 V1.3：事件时间线与图表证据跳转</h3>
+          <h3>功能 1：常规日志分析</h3>
           <p className="hint">
-            仅基于真实解析信号输出数据质量、飞行阶段和确定性事件；不判断根因、硬件故障或事故概率。
+            默认展示日志概览、飞行事件时间线和证据图表；不判断根因、硬件故障或事故概率。
           </p>
         </div>
         <button
@@ -760,7 +760,7 @@ function IncidentAnalysisPanel({
           onClick={onRun}
           disabled={!selectedLogId || isLoading}
         >
-          {isLoading ? '分析中...' : '运行 V1.3 分析'}
+          {isLoading ? '分析中...' : report ? '重新分析' : '运行日志分析'}
         </button>
       </div>
 
@@ -768,24 +768,27 @@ function IncidentAnalysisPanel({
 
       {report ? (
         <div className="incident-result">
-          <div className="incident-summary-grid">
-            <div>
-              <span>契约版本</span>
-              <strong>{report.contractVersion}</strong>
-            </div>
-            <div>
-              <span>数据质量</span>
-              <strong className={`quality-level quality-${report.dataQuality.level}`}>
-                {formatQualityLevel(report.dataQuality.level)}
-              </strong>
-            </div>
-            <div>
-              <span>日志时长</span>
-              <strong>{formatSeconds(report.flightSummary.durationS)}</strong>
-            </div>
-            <div>
-              <span>解锁次数</span>
-              <strong>{report.flightSummary.unlockCount ?? '不可用'}</strong>
+          <div className="incident-section incident-overview-section">
+            <h4>日志概览</h4>
+            <div className="incident-summary-grid">
+              <div>
+                <span>数据质量</span>
+                <strong className={`quality-level quality-${report.dataQuality.level}`}>
+                  {formatQualityLevel(report.dataQuality.level)}
+                </strong>
+              </div>
+              <div>
+                <span>日志时长</span>
+                <strong>{formatSeconds(report.flightSummary.durationS)}</strong>
+              </div>
+              <div>
+                <span>解锁飞行时长</span>
+                <strong>{formatSeconds(report.flightSummary.armedFlightTimeS)}</strong>
+              </div>
+              <div>
+                <span>解锁次数</span>
+                <strong>{report.flightSummary.unlockCount ?? '不可用'}</strong>
+              </div>
             </div>
           </div>
 
@@ -836,15 +839,11 @@ function IncidentAnalysisPanel({
 
           {report.anomalySummary ? (
             <div className="incident-section">
-              <h4>V2 异常检测框架</h4>
+              <h4>异常提示</h4>
               <p className="hint">
-                当前仅汇总日志明确记录的异常旗标和检测器可用性，不输出根因、硬件故障或事故概率。
+                仅汇总日志明确记录的异常旗标和保守检测结果，不输出根因、硬件故障或事故概率。
               </p>
               <div className="incident-summary-grid">
-                <div>
-                  <span>框架版本</span>
-                  <strong>{report.anomalySummary.version}</strong>
-                </div>
                 <div>
                   <span>检测状态</span>
                   <strong>{formatAnomalyStatus(report.anomalySummary.status)}</strong>
@@ -914,7 +913,7 @@ function IncidentAnalysisPanel({
                         finding.counterEvidence ||
                         finding.missingEvidence ? (
                           <details>
-                            <summary>V3 证据详情</summary>
+                            <summary>证据详情</summary>
                             <EvidenceAssessmentList
                               title="支持证据"
                               finding={finding}
@@ -965,7 +964,7 @@ function IncidentAnalysisPanel({
                   })}
                 </ul>
               ) : (
-                <p className="hint">当前 V2 框架未检测到严重异常。</p>
+                <p className="hint">当前未检测到严重异常。</p>
               )}
 
               <details>
@@ -988,9 +987,9 @@ function IncidentAnalysisPanel({
 
           {report.incidentPropagation ? (
             <div className="incident-section">
-              <h4>V3 异常传播链</h4>
+              <h4>证据关系</h4>
               <p className="hint">
-                仅按时间顺序和飞行阶段组织异常现象，不推断根因或硬件故障。
+                仅按时间顺序和飞行阶段组织异常现象，帮助判断先后关系，不推断根因或硬件故障。
               </p>
               {report.incidentPropagation.events.length > 0 ? (
                 <ol className="incident-timeline">
@@ -1015,7 +1014,7 @@ function IncidentAnalysisPanel({
           ) : null}
 
           <div className="incident-section">
-            <h4>确定性事件时间线</h4>
+            <h4>飞行事件时间线</h4>
             {report.eventGroups?.length ? (
               <ol className="incident-timeline incident-event-group-list">
                 {report.eventGroups.map((group) => {
@@ -1150,12 +1149,21 @@ function IncidentAnalysisPanel({
                 ))}
               </ul>
             ) : (
-              <p className="hint">V1.3 标准信号均已映射。</p>
+              <p className="hint">标准信号均已映射。</p>
             )}
           </div>
 
-          <details className="incident-section">
-            <summary>标准信号映射报告</summary>
+          <details className="incident-section incident-advanced-details">
+            <summary>高级诊断细节：标准信号映射</summary>
+            <p className="hint">
+              契约版本：{report.contractVersion}
+              {report.anomalySummary?.version
+                ? `；异常检测版本：${report.anomalySummary.version}`
+                : ''}
+              {report.incidentPropagation?.version
+                ? `；证据关系版本：${report.incidentPropagation.version}`
+                : ''}
+            </p>
             <div className="incident-mapping-table">
               <div className="incident-mapping-row incident-mapping-header">
                 <span>标准信号</span>

@@ -159,6 +159,38 @@
   margin: 0;
 }
 
+.evidence-chart-section {
+  margin-top: 18px;
+}
+
+.advanced-raw-data-panel {
+  margin-top: 16px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 12px;
+}
+
+.advanced-raw-data-panel summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  color: #334155;
+  font-weight: 700;
+}
+
+.advanced-raw-data-panel summary small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.advanced-raw-data-content {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+}
+
 .incident-panel-head {
   display: flex;
   align-items: center;
@@ -921,50 +953,53 @@
   font-weight: 700;
 }
 
-.control-parameter-info {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  border: 1px solid #94a3b8;
-  border-radius: 50%;
+.control-parameter-tooltip-trigger {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  place-items: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 0;
   background: #ffffff;
   color: #475569;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 800;
   line-height: 1;
   cursor: help;
 }
 
-.control-parameter-info::after {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 8px);
-  z-index: 20;
-  width: max-content;
-  max-width: 260px;
-  padding: 7px 9px;
+.control-parameter-tooltip-trigger:hover,
+.control-parameter-tooltip-trigger:focus-visible {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+
+.control-parameter-tooltip {
+  position: fixed;
+  z-index: 1000;
   border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  background: #0f172a;
-  color: #f8fafc;
-  content: attr(data-tooltip);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #ffffff;
+  color: #334155;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.18);
   font-size: 12px;
   font-weight: 500;
-  line-height: 1.45;
-  opacity: 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
   pointer-events: none;
-  transform: translate(-50%, 4px);
-  transition: opacity 0.15s ease, transform 0.15s ease;
   white-space: normal;
 }
 
-.control-parameter-info:hover::after,
-.control-parameter-info:focus::after {
-  opacity: 1;
+.control-parameter-tooltip[data-placement='top'] {
+  transform: translate(-50%, -100%);
+}
+
+.control-parameter-tooltip[data-placement='bottom'] {
   transform: translate(-50%, 0);
 }
 

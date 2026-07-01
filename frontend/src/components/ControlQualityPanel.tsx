@@ -1,5 +1,6 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
+import type { CSSProperties, FormEvent } from 'react'
+import { createPortal } from 'react-dom'
 import ReactECharts from 'echarts-for-react'
 import ChartTimelineScrubber from './ChartTimelineScrubber'
 import type {
@@ -580,6 +581,133 @@ function MetricsTable({ axis }: { axis: ControlQualityAxis | null }) {
   return <CollapsibleMetricTable rows={rows} />
 }
 
+type TooltipPosition = {
+  left: number
+  top: number
+  width: number
+  placement: 'top' | 'bottom'
+}
+
+const PARAMETER_TOOLTIP_MARGIN = 12
+const PARAMETER_TOOLTIP_MAX_WIDTH = 360
+
+function ParameterDescriptionTooltip({
+  description,
+}: {
+  description: string
+}) {
+  const tooltipId = useId()
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const [position, setPosition] = useState<TooltipPosition | null>(null)
+
+  const updatePosition = useCallback(() => {
+    if (typeof window === 'undefined') return
+    const trigger = triggerRef.current
+    if (!trigger) return
+
+    const rect = trigger.getBoundingClientRect()
+    const viewportWidth =
+      window.innerWidth || document.documentElement.clientWidth
+    const availableWidth = Math.max(
+      0,
+      viewportWidth - PARAMETER_TOOLTIP_MARGIN * 2,
+    )
+    const tooltipWidth = Math.min(
+      PARAMETER_TOOLTIP_MAX_WIDTH,
+      availableWidth,
+    )
+    const halfWidth = tooltipWidth / 2
+    const left = Math.min(
+      Math.max(
+        rect.left + rect.width / 2,
+        PARAMETER_TOOLTIP_MARGIN + halfWidth,
+      ),
+      viewportWidth - PARAMETER_TOOLTIP_MARGIN - halfWidth,
+    )
+    const placement = rect.top < 96 ? 'bottom' : 'top'
+    const top =
+      placement === 'top'
+        ? rect.top - PARAMETER_TOOLTIP_MARGIN
+        : rect.bottom + PARAMETER_TOOLTIP_MARGIN
+
+    setPosition({
+      left,
+      top,
+      width: tooltipWidth,
+      placement,
+    })
+  }, [])
+
+  const showTooltip = useCallback(() => {
+    updatePosition()
+  }, [updatePosition])
+
+  const hideTooltip = useCallback(() => {
+    setPosition(null)
+  }, [])
+
+  useEffect(() => {
+    if (!position) return undefined
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        hideTooltip()
+      }
+    }
+
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [hideTooltip, position, updatePosition])
+
+  const tooltipStyle: CSSProperties | undefined = position
+    ? {
+        left: position.left,
+        top: position.top,
+        width: position.width,
+      }
+    : undefined
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="control-parameter-tooltip-trigger"
+        aria-label={`查看 PID 参数说明：${description}`}
+        aria-describedby={tooltipId}
+        aria-expanded={position ? true : false}
+        onBlur={hideTooltip}
+        onFocus={showTooltip}
+        onMouseEnter={showTooltip}
+        onMouseLeave={hideTooltip}
+      >
+        !
+      </button>
+      {position && typeof document !== 'undefined'
+        ? createPortal(
+            <span
+              id={tooltipId}
+              className="control-parameter-tooltip"
+              role="tooltip"
+              data-placement={position.placement}
+              style={tooltipStyle}
+            >
+              {description}
+            </span>,
+            document.body,
+          )
+        : null}
+    </>
+  )
+}
+
 function ParameterTuningSection({
   tuning,
 }: {
@@ -633,15 +761,7 @@ function ParameterTuningSection({
                   <span className="control-parameter-name">
                     {item.parameter}
                     {item.description ? (
-                      <span
-                        className="control-parameter-info"
-                        tabIndex={0}
-                        title={item.description}
-                        aria-label={item.description}
-                        data-tooltip={item.description}
-                      >
-                        !
-                      </span>
+                      <ParameterDescriptionTooltip description={item.description} />
                     ) : null}
                   </span>
                 </th>

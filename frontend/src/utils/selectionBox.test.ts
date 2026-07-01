@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildChartSelectionControlSegment,
   ensureVisibleSelectionBox,
   isValidTimeSelectionBox,
   isValidSelectionBox,
   normalizeSelectionBox,
+  shouldShowSelectionPreview,
 } from './selectionBox'
 
 describe('selectionBox', () => {
@@ -64,7 +66,25 @@ describe('selectionBox', () => {
     )
 
     expect(isValidSelectionBox(tallButNarrowBox, 5)).toBe(true)
+    expect(shouldShowSelectionPreview(tallButNarrowBox, 5)).toBe(true)
     expect(isValidTimeSelectionBox(tallButNarrowBox, 5)).toBe(false)
+  })
+
+  it('builds a current-column control segment for valid chart selections', () => {
+    expect(buildChartSelectionControlSegment('log-column-1', 12, 8)).toEqual({
+      rangeGroupKey: 'log-column-1',
+      segment: {
+        startS: 8,
+        endS: 12,
+        source: 'chart_selection',
+      },
+    })
+  })
+
+  it('skips control segment recalculation outside control-quality charts', () => {
+    expect(buildChartSelectionControlSegment(undefined, 8, 12)).toBeNull()
+    expect(buildChartSelectionControlSegment('', 8, 12)).toBeNull()
+    expect(buildChartSelectionControlSegment('log-column-1', 8, 8.0004)).toBeNull()
   })
 
   it('keeps a very flat selection box visible', () => {

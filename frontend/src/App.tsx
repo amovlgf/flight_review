@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import './App.css'
+import AdvancedRawDataPanel from './components/AdvancedRawDataPanel'
 import BatchLogUpload from './components/BatchLogUpload'
 import ChartPanel from './components/ChartPanel'
 import ControlQualityPanel from './components/ControlQualityPanel'
@@ -31,9 +32,11 @@ import type {
   IncidentTimelineEvent,
 } from './types/log'
 import {
+  buildChartSelectionControlSegment,
   ensureVisibleSelectionBox,
   isValidTimeSelectionBox,
   normalizeSelectionBox,
+  shouldShowSelectionPreview,
 } from './utils/selectionBox'
 
 type ChartAction = {
@@ -119,6 +122,7 @@ const PAGE_SIZE = 8
 const TIMELINE_PLAYBACK_SPEED = 1
 const TIMELINE_FINE_STEP_MIN_S = 0.05
 const TIMELINE_FINE_STEP_MAX_S = 1
+const CHART_SELECTION_MIN_PREVIEW_PX = 5
 const CHART_SELECTION_MIN_WIDTH_PX = 5
 const CHART_SELECTION_MIN_VISUAL_PX = 1
 
@@ -204,6 +208,10 @@ function App() {
   )
   const [seriesData, setSeriesData] = useState<ChartSeries[]>([])
   const [topicCharts, setTopicCharts] = useState<TopicChart[]>([])
+  const [evidenceTopicCharts, setEvidenceTopicCharts] = useState<TopicChart[]>([])
+  const [evidenceChartHint, setEvidenceChartHint] = useState(
+    '运行日志分析后展示事件证据图表。',
+  )
   const [modeSegments, setModeSegments] = useState<ModeSegment[]>([])
   const [diagnostics, setDiagnostics] = useState<DiagnosticItem[]>([])
   const [incidentAnalysisReport, setIncidentAnalysisReport] =
@@ -232,6 +240,7 @@ function App() {
   const [controlAnalysisReports, setControlAnalysisReports] = useState<
     ControlAnalysisReportItem[]
   >([])
+  const controlAnalysisReportsRef = useRef<ControlAnalysisReportItem[]>([])
   const [controlQualityLinkedRanges, setControlQualityLinkedRanges] = useState<
     Record<string, ControlQualityLinkedRange>
   >({})
@@ -264,6 +273,10 @@ function App() {
   useEffect(() => {
     isTimelinePlayingRef.current = isTimelinePlaying
   }, [isTimelinePlaying])
+
+  useEffect(() => {
+    controlAnalysisReportsRef.current = controlAnalysisReports
+  }, [controlAnalysisReports])
 
   const loadLogList = async (options?: {
     preferLogId?: string
@@ -345,6 +358,8 @@ function App() {
       setStatusText('\u6b63\u5728\u4e0a\u4f20...')
       setSeriesData([])
       setTopicCharts([])
+      setEvidenceTopicCharts([])
+      setEvidenceChartHint('运行日志分析后展示事件证据图表。')
       setModeSegments([])
       setDiagnostics([])
       setIncidentAnalysisReport(null)
@@ -365,15 +380,18 @@ function App() {
       setLogAnalysisStep('chart')
       if (logId) {
         await loadChartForLog(logId)
+        await loadIncidentAnalysisForLog(logId)
       }
       setStatusText(
         logId
-          ? `\u4e0a\u4f20\u6210\u529f\uff08logId: ${logId}\uff09\uff0c\u56fe\u8868\u5df2\u81ea\u52a8\u52a0\u8f7d\u3002`
+          ? `\u4e0a\u4f20\u6210\u529f\uff08logId: ${logId}\uff09\uff0c\u5e38\u89c4\u5206\u6790\u5df2\u81ea\u52a8\u52a0\u8f7d\u3002`
           : '\u4e0a\u4f20\u6210\u529f\u3002',
       )
     } catch {
       setSeriesData([])
       setTopicCharts([])
+      setEvidenceTopicCharts([])
+      setEvidenceChartHint('运行日志分析后展示事件证据图表。')
       setModeSegments([])
       setDiagnostics([])
       setIncidentAnalysisReport(null)
@@ -516,7 +534,7 @@ function App() {
     }
   }
 
-  const loadControlQualityForItem = async (
+  const loadControlQualityForItem = useCallback(async (
     clientId: string,
     logId: string,
     segment?: { startS: number | null; endS: number | null; source?: string },
@@ -560,7 +578,7 @@ function App() {
       )
       return false
     }
-  }
+  }, [])
 
   const loadChartForLog = async (logId: string) => {
     if (!logId) return
@@ -621,31 +639,39 @@ function App() {
     }
   }
 
-  const handleRunIncidentAnalysis = async () => {
-    if (!selectedLogId) return
+  const loadIncidentAnalysisForLog = async (logId: string) => {
+    if (!logId) return
 
     try {
       setIsIncidentAnalysisLoading(true)
       setIncidentAnalysisError('')
       setIncidentEvidenceFocus(null)
-      const report = await runIncidentAnalysis(selectedLogId)
+      setEvidenceTopicCharts([])
+      setEvidenceChartHint('正在生成事件证据图表...')
+      const report = await runIncidentAnalysis(logId)
       setIncidentAnalysisReport(report)
       const incidentTopicCharts = mapIncidentChartGroupsToTopicCharts(report)
       if (incidentTopicCharts.length > 0) {
-        setTopicCharts(incidentTopicCharts)
-        setSeriesData([])
-        setDiagnostics([])
-        setChartHint('已加载 V1.3 事件证据图表。')
+        setEvidenceTopicCharts(incidentTopicCharts)
+        setEvidenceChartHint('已加载事件证据图表。')
+      } else {
+        setEvidenceChartHint('当前日志没有可展示的事件证据图表。')
       }
     } catch {
       setIncidentAnalysisReport(null)
       setIncidentEvidenceFocus(null)
+      setEvidenceTopicCharts([])
+      setEvidenceChartHint('事件证据图表不可用。')
       setIncidentAnalysisError(
-        '\u65e5\u5fd7 V1.3 \u5206\u6790\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u5df2\u542f\u52a8\u4e14\u65e5\u5fd7\u4ecd\u5728\u5f53\u524d\u4f1a\u8bdd\u4e2d\u3002',
+        '\u65e5\u5fd7\u5206\u6790\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u5df2\u542f\u52a8\u4e14\u65e5\u5fd7\u4ecd\u5728\u5f53\u524d\u4f1a\u8bdd\u4e2d\u3002',
       )
     } finally {
       setIsIncidentAnalysisLoading(false)
     }
+  }
+
+  const handleRunIncidentAnalysis = async () => {
+    await loadIncidentAnalysisForLog(selectedLogId)
   }
 
   const handleLogSelect = async (logId: string) => {
@@ -653,6 +679,8 @@ function App() {
     setSelectedLogId(logId)
     setSeriesData([])
     setTopicCharts([])
+    setEvidenceTopicCharts([])
+    setEvidenceChartHint('运行日志分析后展示事件证据图表。')
     setModeSegments([])
     setDiagnostics([])
     setIncidentAnalysisReport(null)
@@ -662,6 +690,7 @@ function App() {
     setSelectionBox(null)
     if (logId) {
       await loadChartForLog(logId)
+      await loadIncidentAnalysisForLog(logId)
     } else {
       setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
     }
@@ -680,9 +709,48 @@ function App() {
     })
   }
 
+  const handleControlQualityChartSelection = useCallback((
+    rangeGroupKey: string | undefined,
+    startValue: number,
+    endValue: number,
+  ) => {
+    const controlSegment = buildChartSelectionControlSegment(
+      rangeGroupKey,
+      startValue,
+      endValue,
+    )
+    if (!controlSegment) {
+      return
+    }
+
+    setControlQualityLinkedRanges((current) => ({
+      ...current,
+      [controlSegment.rangeGroupKey]: {
+        startS: controlSegment.segment.startS,
+        endS: controlSegment.segment.endS,
+      },
+    }))
+
+    const targetItem = controlAnalysisReportsRef.current.find(
+      (item) => item.clientId === controlSegment.rangeGroupKey,
+    )
+    if (!targetItem?.logId) {
+      return
+    }
+
+    void loadControlQualityForItem(
+      targetItem.clientId,
+      targetItem.logId,
+      controlSegment.segment,
+    )
+  }, [loadControlQualityForItem])
+
   const handleSearch = async () => {
     await loadLogList({ page: 1, keyword: searchKeyword })
     setSeriesData([])
+    setTopicCharts([])
+    setEvidenceTopicCharts([])
+    setEvidenceChartHint('运行日志分析后展示事件证据图表。')
     setDiagnostics([])
     setIncidentAnalysisReport(null)
     setIncidentAnalysisError('')
@@ -843,23 +911,23 @@ function App() {
 
   const findMatchingChartTopic = useCallback((chartTopic: string, chartGroupId?: string) => {
     if (chartGroupId) {
-      const groupMatch = topicCharts.find((item) => item.topic === chartGroupId)
+      const groupMatch = evidenceTopicCharts.find((item) => item.topic === chartGroupId)
       if (groupMatch) return groupMatch.topic
     }
 
     if (!chartTopic) return ''
 
-    const exactMatch = topicCharts.find((item) => item.topic === chartTopic)
+    const exactMatch = evidenceTopicCharts.find((item) => item.topic === chartTopic)
     if (exactMatch) return exactMatch.topic
 
-    const prefixedMatch = topicCharts.find(
+    const prefixedMatch = evidenceTopicCharts.find(
       (item) =>
         item.topic.startsWith(`${chartTopic}_`) ||
         chartTopic.startsWith(`${item.topic}_`),
     )
 
     return prefixedMatch?.topic ?? chartTopic
-  }, [topicCharts])
+  }, [evidenceTopicCharts])
 
   const zoomChartsToTimeWindow = useCallback((startS: number, endS: number) => {
     const safeStartS = Math.min(startS, endS)
@@ -1327,9 +1395,9 @@ function App() {
       )
 
       if (
-        !isValidTimeSelectionBox(
+        !shouldShowSelectionPreview(
           normalizedBox,
-          CHART_SELECTION_MIN_WIDTH_PX,
+          CHART_SELECTION_MIN_PREVIEW_PX,
         )
       ) {
         clearSelectionPreview(chartKey)
@@ -1387,6 +1455,11 @@ function App() {
         if (endValue - startValue >= 0.001) {
           const applied = applyDataZoomByValue(startValue, endValue)
           if (applied) {
+            handleControlQualityChartSelection(
+              rangeGroupKey,
+              startValue,
+              endValue,
+            )
             clearSelectionPreview(chartKey)
             return
           }
@@ -1604,6 +1677,7 @@ function App() {
   }, [
     clearSelectionPreview,
     clearSyncedChartCursor,
+    handleControlQualityChartSelection,
     showTimelineCursor,
     syncChartCursor,
     syncChartZoom,
@@ -1655,9 +1729,9 @@ function App() {
                 className="feature-card"
                 onClick={handleEnterLogAnalysis}
               >
-                <h3>{'\u529f\u80fd 1\uff1a\u65e5\u5fd7\u4e0a\u4f20\u5206\u6790'}</h3>
+                <h3>{'\u529f\u80fd 1\uff1a\u5e38\u89c4\u65e5\u5fd7\u5206\u6790'}</h3>
                 <p>
-                  {'\u4e0a\u4f20\u5355\u4efd .ulg \u65e5\u5fd7\uff0c\u67e5\u770b\u56fe\u8868\u4e0e\u8bca\u65ad\u4fe1\u606f\u3002'}
+                  {'\u4e0a\u4f20\u5355\u4efd .ulg \u65e5\u5fd7\uff0c\u67e5\u770b\u65e5\u5fd7\u6982\u89c8\u3001\u98de\u884c\u4e8b\u4ef6\u548c\u8bc1\u636e\u56fe\u8868\u3002'}
                 </p>
               </button>
               <button
@@ -1709,7 +1783,7 @@ function App() {
         {viewMode === 'log-analysis' && logAnalysisStep === 'chart' ? (
           <section className={`card ${selectedLogId ? '' : 'card-disabled'}`}>
             <div className="page-title-row">
-              <h2>{'\u529f\u80fd 1\uff1a\u65e5\u5fd7\u4e0a\u4f20\u5206\u6790'}</h2>
+              <h2>{'\u529f\u80fd 1\uff1a\u5e38\u89c4\u65e5\u5fd7\u5206\u6790'}</h2>
               <div className="actions">
                 <button
                   type="button"
@@ -1767,32 +1841,56 @@ function App() {
               onChartDispose={handleChartDispose}
               onEventFocus={focusIncidentTimelineEvent}
             />
-            <ChartPanel
-              activeLogMeta={activeLogMeta}
-              topicCharts={topicCharts}
-              seriesData={seriesData}
-              modeSegments={modeSegments}
-              diagnostics={diagnostics}
-              selectionBox={selectionBox}
-              timelinePointer={timelinePointer}
-              isTimelinePlaying={isTimelinePlaying}
-              activeChartTopic={incidentEvidenceFocus?.chartTopic}
-              activeSeriesName={incidentEvidenceFocus?.seriesName}
-              activeChartBadgeLabel={
-                incidentEvidenceFocus
-                  ? `${incidentEvidenceFocus.label} @ ${incidentEvidenceFocus.targetTimeS.toFixed(2)}s`
-                  : undefined
-              }
-              chartHint={chartHint}
-              showDefaultSeriesFallback
-              onChartReady={bindChartInteractions}
-              onChartDispose={handleChartDispose}
-              onTimelineSeek={(timeValue) => {
-                setIsTimelinePlaying(false)
-                setTimelineTime(timeValue)
-              }}
-              onToggleTimelinePlayback={toggleTimelinePlayback}
-            />
+            <section className="incident-section evidence-chart-section">
+              <h3>证据图表</h3>
+              <ChartPanel
+                activeLogMeta={activeLogMeta}
+                topicCharts={evidenceTopicCharts}
+                seriesData={[]}
+                modeSegments={modeSegments}
+                diagnostics={[]}
+                selectionBox={selectionBox}
+                timelinePointer={timelinePointer}
+                isTimelinePlaying={isTimelinePlaying}
+                activeChartTopic={incidentEvidenceFocus?.chartTopic}
+                activeSeriesName={incidentEvidenceFocus?.seriesName}
+                activeChartBadgeLabel={
+                  incidentEvidenceFocus
+                    ? `${incidentEvidenceFocus.label} @ ${incidentEvidenceFocus.targetTimeS.toFixed(2)}s`
+                    : undefined
+                }
+                chartHint={evidenceChartHint}
+                showDefaultSeriesFallback={false}
+                onChartReady={bindChartInteractions}
+                onChartDispose={handleChartDispose}
+                onTimelineSeek={(timeValue) => {
+                  setIsTimelinePlaying(false)
+                  setTimelineTime(timeValue)
+                }}
+                onToggleTimelinePlayback={toggleTimelinePlayback}
+              />
+            </section>
+            <AdvancedRawDataPanel>
+              <ChartPanel
+                activeLogMeta={activeLogMeta}
+                topicCharts={topicCharts}
+                seriesData={seriesData}
+                modeSegments={modeSegments}
+                diagnostics={diagnostics}
+                selectionBox={selectionBox}
+                timelinePointer={timelinePointer}
+                isTimelinePlaying={isTimelinePlaying}
+                chartHint={chartHint}
+                showDefaultSeriesFallback
+                onChartReady={bindChartInteractions}
+                onChartDispose={handleChartDispose}
+                onTimelineSeek={(timeValue) => {
+                  setIsTimelinePlaying(false)
+                  setTimelineTime(timeValue)
+                }}
+                onToggleTimelinePlayback={toggleTimelinePlayback}
+              />
+            </AdvancedRawDataPanel>
           </section>
         ) : null}
 

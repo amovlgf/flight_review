@@ -10,6 +10,15 @@ export type NormalizedSelectionBox = {
   height: number
 }
 
+export type ChartSelectionControlSegment = {
+  rangeGroupKey: string
+  segment: {
+    startS: number
+    endS: number
+    source: 'chart_selection'
+  }
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -62,6 +71,13 @@ export function isValidSelectionBox(
   return Math.max(box.width, box.height) >= threshold
 }
 
+export function shouldShowSelectionPreview(
+  box: NormalizedSelectionBox | null | undefined,
+  minPixels = 5,
+) {
+  return isValidSelectionBox(box, minPixels)
+}
+
 export function isValidTimeSelectionBox(
   box: NormalizedSelectionBox | null | undefined,
   minWidthPixels = 5,
@@ -98,5 +114,48 @@ export function ensureVisibleSelectionBox(
     top: box.top,
     width: Math.max(box.width, minimum),
     height: Math.max(box.height, minimum),
+  }
+}
+
+export function buildChartSelectionControlSegment(
+  rangeGroupKey: string | null | undefined,
+  startValue: number,
+  endValue: number,
+  minDurationS = 0.001,
+): ChartSelectionControlSegment | null {
+  const key = typeof rangeGroupKey === 'string' ? rangeGroupKey.trim() : ''
+  if (!key) {
+    return null
+  }
+
+  if (
+    typeof startValue !== 'number' ||
+    typeof endValue !== 'number' ||
+    !Number.isFinite(startValue) ||
+    !Number.isFinite(endValue)
+  ) {
+    return null
+  }
+
+  const startS = Math.min(startValue, endValue)
+  const endS = Math.max(startValue, endValue)
+  const minimum =
+    typeof minDurationS === 'number' &&
+    Number.isFinite(minDurationS) &&
+    minDurationS > 0
+      ? minDurationS
+      : 0
+
+  if (endS - startS < minimum) {
+    return null
+  }
+
+  return {
+    rangeGroupKey: key,
+    segment: {
+      startS,
+      endS,
+      source: 'chart_selection',
+    },
   }
 }

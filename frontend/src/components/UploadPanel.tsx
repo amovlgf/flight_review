@@ -33,11 +33,11 @@ function UploadPanel({
 
   return (
     <section className="card">
-      <h2>{'\u529f\u80fd 1\uff1a\u65e5\u5fd7\u4e0a\u4f20\u5206\u6790'}</h2>
+      <h2>{'\u529f\u80fd 1\uff1a\u5e38\u89c4\u65e5\u5fd7\u5206\u6790'}</h2>
       <ul>
-        <li>{'\u524d\u7aef\u4e0a\u4f20\u5165\u53e3'}</li>
-        <li>{'\u540e\u7aef\u6587\u4ef6\u63a5\u6536\u63a5\u53e3'}</li>
-        <li>{'\u65e5\u5fd7\u89e3\u6790\u670d\u52a1\u5360\u4f4d'}</li>
+        <li>{'\u4e0a\u4f20\u5355\u4efd PX4 .ulg \u65e5\u5fd7'}</li>
+        <li>{'\u751f\u6210\u65e5\u5fd7\u6982\u89c8\u548c\u98de\u884c\u4e8b\u4ef6\u65f6\u95f4\u7ebf'}</li>
+        <li>{'\u4fdd\u7559\u539f\u59cb topic \u56fe\u8868\u5230\u9ad8\u7ea7\u539f\u59cb\u6570\u636e'}</li>
       </ul>
       <input
         ref={fileInputRef}
