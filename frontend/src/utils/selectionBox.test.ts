@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildChartSelectionControlSegment,
   ensureVisibleSelectionBox,
+  isSelectableChartPoint,
   isValidTimeSelectionBox,
   isValidSelectionBox,
   normalizeSelectionBox,
@@ -68,6 +69,26 @@ describe('selectionBox', () => {
     expect(isValidSelectionBox(tallButNarrowBox, 5)).toBe(true)
     expect(shouldShowSelectionPreview(tallButNarrowBox, 5)).toBe(true)
     expect(isValidTimeSelectionBox(tallButNarrowBox, 5)).toBe(false)
+  })
+
+  it('only starts chart selection inside the primary grid area', () => {
+    const calls: Array<[Record<string, unknown>, [number, number]]> = []
+    const chart = {
+      containPixel(
+        finder: Record<string, unknown>,
+        value: [number, number],
+      ) {
+        calls.push([finder, value])
+        return value[1] >= 40
+      },
+    }
+
+    expect(isSelectableChartPoint(chart, { x: 80, y: 70 })).toBe(true)
+    expect(isSelectableChartPoint(chart, { x: 80, y: 18 })).toBe(false)
+    expect(calls).toEqual([
+      [{ gridIndex: 0 }, [80, 70]],
+      [{ gridIndex: 0 }, [80, 18]],
+    ])
   })
 
   it('builds a current-column control segment for valid chart selections', () => {

@@ -134,7 +134,7 @@ function buildEvent(): IncidentTimelineEvent {
 }
 
 describe('IncidentAnalysisPanel evidence chart helpers', () => {
-  it('presents feature one as routine log analysis without version-centric section titles', () => {
+  it('presents feature one as a summary-first routine log analysis page', () => {
     const html = renderToStaticMarkup(
       <IncidentAnalysisPanel
         selectedLogId="log-1"
@@ -146,11 +146,13 @@ describe('IncidentAnalysisPanel evidence chart helpers', () => {
     )
 
     expect(html).toContain('功能 1：常规日志分析')
-    expect(html).toContain('日志概览')
+    expect(html).toContain('关键摘要')
+    expect(html).toContain('异常摘要')
     expect(html).toContain('异常提示')
-    expect(html).toContain('证据关系')
     expect(html).toContain('飞行事件时间线')
-    expect(html).toContain('高级诊断细节')
+    expect(html).toContain('数据限制 / 高级诊断')
+    expect(html).not.toContain('证据图表</h3>')
+    expect(html).not.toContain('显示字段')
     expect(html).not.toContain('功能 1 V1.3')
     expect(html).not.toContain('运行 V1.3 分析')
     expect(html).not.toContain('V2 异常检测框架')

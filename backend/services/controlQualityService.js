@@ -2,12 +2,23 @@ const LOOP_ORDER = ['actuator', 'rate', 'attitude', 'velocity', 'position'];
 const MIN_ALIGNED_POINTS = 5;
 const EPS = 1e-9;
 const DEFAULT_TUNING_STEP_PERCENT = 5;
+const WEAK_TUNING_STEP_PERCENT = 2.5;
 const DEFAULT_PARAMETER_BOUND = Object.freeze({
   min: 0,
   max: null,
   maxStepPercent: DEFAULT_TUNING_STEP_PERCENT,
 });
 const ACTUATOR_SATURATION_BLOCK_THRESHOLD = 0.05;
+const ACTUATOR_SATURATION_SEVERE_THRESHOLD = 0.15;
+const MIN_TUNING_SAMPLE_COUNT = 10;
+const MIN_TUNING_DURATION_S = 2;
+const HIGH_OSCILLATION_RATE = 1.0;
+const HIGH_OSCILLATION_COUNT = 8;
+const SEVERE_OSCILLATION_RATE = 2.0;
+const SEVERE_OSCILLATION_COUNT = 16;
+const HIGH_OVERSHOOT_RATIO = 0.3;
+const HIGH_TRACKING_ERROR_NRMSE = 0.25;
+const HIGH_DELAY_S = 0.15;
 
 const REQUIRED_TOPICS = [
   'vehicle_angular_velocity',
@@ -390,6 +401,36 @@ function maxMetricValue(axisItems, key, absolute = false) {
   return Math.max(...values);
 }
 
+function minMetricValue(axisItems, key) {
+  const values = axisItems
+    .map((axis) => axis?.metrics?.[key])
+    .filter(isFiniteNumber);
+  if (!values.length) return null;
+  return Math.min(...values);
+}
+
+function weakestExcitationLevel(axisItems) {
+  const rank = {
+    low: 0,
+    medium: 1,
+    high: 2,
+  };
+  const levels = axisItems
+    .map((axis) => axis?.metrics?.excitation_level)
+    .filter((value) => typeof value === 'string' && value in rank);
+  if (!levels.length) return null;
+  return levels.reduce((weakest, level) =>
+    rank[level] < rank[weakest] ? level : weakest,
+  );
+}
+
+function firstNonOkStatus(axisItems, key) {
+  const statuses = axisItems
+    .map((axis) => axis?.metrics?.[key])
+    .filter((value) => typeof value === 'string');
+  return statuses.find((status) => status !== 'ok') || statuses[0] || null;
+}
+
 function summarizeAxisMetrics(loop, axes) {
   const axisItems = axes
     .map((axisName) => loop?.axis?.[axisName])
@@ -403,6 +444,15 @@ function summarizeAxisMetrics(loop, axes) {
       effectiveZeroCrossingRate: null,
       effectiveZeroCrossingCount: null,
       delayAbsS: null,
+      sampleCount: null,
+      durationS: null,
+      excitationLevel: null,
+      delayStatus: null,
+      overshootStatus: null,
+      feedbackDiffStd: null,
+      setpointDiffStd: null,
+      errorDiffStd: null,
+      signalScale: null,
     };
   }
 
@@ -413,65 +463,338 @@ function summarizeAxisMetrics(loop, axes) {
     effectiveZeroCrossingRate: maxMetricValue(axisItems, 'effective_zero_crossing_rate'),
     effectiveZeroCrossingCount: maxMetricValue(axisItems, 'effective_zero_crossing_count'),
     delayAbsS: maxMetricValue(axisItems, 'delay_s', true),
+    sampleCount: minMetricValue(axisItems, 'sample_count'),
+    durationS: minMetricValue(axisItems, 'duration_s'),
+    excitationLevel: weakestExcitationLevel(axisItems),
+    delayStatus: firstNonOkStatus(axisItems, 'delay_status'),
+    overshootStatus: firstNonOkStatus(axisItems, 'overshoot_status'),
+    feedbackDiffStd: maxMetricValue(axisItems, 'feedback_diff_std'),
+    setpointDiffStd: maxMetricValue(axisItems, 'setpoint_diff_std'),
+    errorDiffStd: maxMetricValue(axisItems, 'error_diff_std'),
+    signalScale: maxMetricValue(axisItems, 'signal_scale'),
   };
 }
 
-function chooseParameterStep(gain, metricSummary) {
-  if (metricSummary.status !== 'available') {
-    return {
-      percent: 0,
-      reason: 'No available loop metrics for this parameter group.',
-    };
-  }
+function uniqueStrings(values) {
+  return [...new Set(values.filter(Boolean))];
+}
 
-  const nrmse = metricSummary.nrmse ?? 0;
-  const overshootRatio = metricSummary.overshootRatio ?? 0;
+function buildMetricEvidence(metricSummary) {
+  const evidence = [];
+  if (isFiniteNumber(metricSummary.nrmse)) {
+    evidence.push(`nrmse=${roundMetric(metricSummary.nrmse, 6)}`);
+  }
+  if (isFiniteNumber(metricSummary.overshootRatio)) {
+    evidence.push(`overshoot_ratio=${roundMetric(metricSummary.overshootRatio, 6)}`);
+  }
+  if (isFiniteNumber(metricSummary.delayAbsS)) {
+    evidence.push(`abs_delay_s=${roundMetric(metricSummary.delayAbsS, 4)}`);
+  }
+  if (isFiniteNumber(metricSummary.effectiveZeroCrossingRate)) {
+    evidence.push(
+      `effective_zero_crossing_rate=${roundMetric(metricSummary.effectiveZeroCrossingRate, 6)}`,
+    );
+  }
+  if (isFiniteNumber(metricSummary.effectiveZeroCrossingCount)) {
+    evidence.push(
+      `effective_zero_crossing_count=${roundMetric(metricSummary.effectiveZeroCrossingCount, 6)}`,
+    );
+  }
+  if (metricSummary.excitationLevel) {
+    evidence.push(`excitation_level=${metricSummary.excitationLevel}`);
+  }
+  if (isFiniteNumber(metricSummary.sampleCount)) {
+    evidence.push(`sample_count=${metricSummary.sampleCount}`);
+  }
+  if (isFiniteNumber(metricSummary.durationS)) {
+    evidence.push(`duration_s=${roundMetric(metricSummary.durationS, 3)}`);
+  }
+  return evidence;
+}
+
+function getMetricGateBlockers(loopName, axisLabel, metricSummary) {
+  const prefix = `${loopName} ${axisLabel}`;
+  if (metricSummary.status !== 'available') {
+    return [`${prefix}: no available loop metrics for this parameter group.`];
+  }
+  if (
+    !isFiniteNumber(metricSummary.sampleCount) ||
+    metricSummary.sampleCount < MIN_TUNING_SAMPLE_COUNT
+  ) {
+    return [`${prefix}: not enough data samples for conservative tuning.`];
+  }
+  if (
+    !isFiniteNumber(metricSummary.durationS) ||
+    metricSummary.durationS < MIN_TUNING_DURATION_S
+  ) {
+    return [`${prefix}: analysis window is too short for conservative tuning.`];
+  }
+  if (metricSummary.excitationLevel === 'low') {
+    return [`${prefix}: setpoint excitation is too low for PID recommendation.`];
+  }
+  if (
+    metricSummary.delayStatus &&
+    metricSummary.delayStatus !== 'ok' &&
+    metricSummary.delayStatus !== 'not_enough_excitation'
+  ) {
+    return [`${prefix}: delay estimate is ${metricSummary.delayStatus}.`];
+  }
+  return [];
+}
+
+function getOscillationSeverity(metricSummary) {
   const zeroCrossingRate = metricSummary.effectiveZeroCrossingRate ?? 0;
   const zeroCrossingCount = metricSummary.effectiveZeroCrossingCount ?? 0;
-  const delayAbsS = metricSummary.delayAbsS ?? 0;
-  const highOscillation = zeroCrossingRate >= 1.0 || zeroCrossingCount >= 8;
-  const highOvershoot = overshootRatio >= 0.3;
-  const highTrackingError = nrmse >= 0.25;
-  const highDelay = delayAbsS >= 0.15;
+  if (
+    zeroCrossingRate >= SEVERE_OSCILLATION_RATE ||
+    zeroCrossingCount >= SEVERE_OSCILLATION_COUNT
+  ) {
+    return 'severe';
+  }
+  if (
+    zeroCrossingRate >= HIGH_OSCILLATION_RATE ||
+    zeroCrossingCount >= HIGH_OSCILLATION_COUNT
+  ) {
+    return 'high';
+  }
+  return 'none';
+}
 
-  if (highOscillation) {
+function hasHighOvershoot(metricSummary) {
+  return (
+    isFiniteNumber(metricSummary.overshootRatio) &&
+    metricSummary.overshootRatio >= HIGH_OVERSHOOT_RATIO
+  );
+}
+
+function hasHighTrackingError(metricSummary) {
+  return (
+    isFiniteNumber(metricSummary.nrmse) &&
+    metricSummary.nrmse >= HIGH_TRACKING_ERROR_NRMSE
+  );
+}
+
+function hasHighDelay(metricSummary) {
+  return (
+    isFiniteNumber(metricSummary.delayAbsS) &&
+    metricSummary.delayAbsS >= HIGH_DELAY_S
+  );
+}
+
+function hasLowNoiseEvidence(metricSummary) {
+  const feedbackDiffStd = metricSummary.feedbackDiffStd;
+  if (!isFiniteNumber(feedbackDiffStd)) return false;
+  const signalScale = Math.max(metricSummary.signalScale ?? 0, EPS);
+  const setpointDiffStd = metricSummary.setpointDiffStd ?? 0;
+  const threshold = Math.max(signalScale * 0.25, setpointDiffStd * 1.5, EPS);
+  return feedbackDiffStd <= threshold;
+}
+
+function hasHighNoiseEvidence(metricSummary) {
+  const feedbackDiffStd = metricSummary.feedbackDiffStd;
+  if (!isFiniteNumber(feedbackDiffStd)) return false;
+  const signalScale = Math.max(metricSummary.signalScale ?? 0, EPS);
+  const setpointDiffStd = metricSummary.setpointDiffStd ?? 0;
+  const threshold = Math.max(signalScale * 0.35, setpointDiffStd * 3, EPS);
+  return feedbackDiffStd >= threshold;
+}
+
+function getPrimaryPhenomenon(metricSummary) {
+  const oscillationSeverity = getOscillationSeverity(metricSummary);
+  if (oscillationSeverity === 'severe') return 'severe_oscillation';
+  if (oscillationSeverity === 'high') return 'oscillation';
+  if (hasHighOvershoot(metricSummary)) return 'overshoot';
+  if (hasHighTrackingError(metricSummary) && hasHighDelay(metricSummary)) {
+    return 'delay';
+  }
+  if (hasHighTrackingError(metricSummary)) return 'steady_error';
+  return 'none';
+}
+
+function chooseParameterStep({
+  loopName,
+  axisLabel,
+  gain,
+  metricSummary,
+  groupContext,
+}) {
+  const evidence = buildMetricEvidence(metricSummary);
+  const primaryPhenomenon = getPrimaryPhenomenon(metricSummary);
+
+  if (primaryPhenomenon === 'severe_oscillation') {
     return {
-      percent: -DEFAULT_TUNING_STEP_PERCENT,
-      reason: 'Effective zero-crossing is high, reduce gain conservatively.',
+      status: 'blocked',
+      percent: 0,
+      phenomenon: 'severe_oscillation',
+      confidence: 'high',
+      reason:
+        'Severe oscillation requires manual inspection before ordinary PID recommendations.',
+      evidence,
     };
   }
 
-  if (highOvershoot) {
-    if (gain === 'D') {
+  if (primaryPhenomenon === 'oscillation') {
+    if (loopName === 'rate' && gain === 'P') {
       return {
-        percent: DEFAULT_TUNING_STEP_PERCENT,
-        reason: 'Overshoot is high without strong oscillation, add damping conservatively.',
+        percent: -DEFAULT_TUNING_STEP_PERCENT,
+        phenomenon: 'oscillation',
+        confidence: 'high',
+        reason: 'Rate loop oscillation is high; reduce P conservatively.',
+        evidence,
       };
     }
-    return {
-      percent: -DEFAULT_TUNING_STEP_PERCENT,
-      reason: 'Overshoot is high, reduce gain conservatively.',
-    };
+    if (loopName === 'rate' && gain === 'D' && hasHighNoiseEvidence(metricSummary)) {
+      return {
+        percent: -DEFAULT_TUNING_STEP_PERCENT,
+        phenomenon: 'noise',
+        confidence: 'medium',
+        reason: 'Rate loop oscillation has high noise evidence; reduce D conservatively.',
+        evidence,
+      };
+    }
+    if (loopName === 'attitude' && gain === 'P') {
+      return {
+        percent: -DEFAULT_TUNING_STEP_PERCENT,
+        phenomenon: 'oscillation',
+        confidence: 'medium',
+        reason: 'Attitude loop oscillation is high while inner loops are usable; reduce P.',
+        evidence,
+      };
+    }
+    if ((loopName === 'velocity' || loopName === 'position') && gain === 'P') {
+      return {
+        percent: -WEAK_TUNING_STEP_PERCENT,
+        phenomenon: 'oscillation',
+        confidence: 'medium',
+        reason: `${loopName} loop oscillation is high; reduce P with a small step.`,
+        evidence,
+      };
+    }
   }
 
-  if (highTrackingError && highDelay) {
-    if (gain === 'P') {
+  if (primaryPhenomenon === 'overshoot') {
+    if (
+      loopName === 'rate' &&
+      gain === 'D' &&
+      groupContext.canIncreaseDForOvershoot
+    ) {
+      return {
+        percent: WEAK_TUNING_STEP_PERCENT,
+        phenomenon: 'overshoot',
+        confidence: 'medium',
+        reason:
+          'Rate overshoot is high with low noise evidence; increase D with a small step.',
+        evidence,
+      };
+    }
+    if (
+      loopName === 'rate' &&
+      gain === 'P' &&
+      !groupContext.canIncreaseDForOvershoot
+    ) {
+      return {
+        percent: -WEAK_TUNING_STEP_PERCENT,
+        phenomenon: 'overshoot',
+        confidence: 'low',
+        reason:
+          'Rate overshoot is high but D is not usable for an automatic increase; reduce P weakly.',
+        evidence,
+      };
+    }
+    if (loopName === 'attitude' && gain === 'P') {
+      return {
+        percent: -WEAK_TUNING_STEP_PERCENT,
+        phenomenon: 'overshoot',
+        confidence: 'medium',
+        reason: 'Attitude overshoot is high while rate is usable; reduce P weakly.',
+        evidence,
+      };
+    }
+    if (loopName === 'velocity') {
+      if (gain === 'P') {
+        return {
+          percent: -WEAK_TUNING_STEP_PERCENT,
+          phenomenon: 'overshoot',
+          confidence: 'medium',
+          reason: 'Velocity overshoot is high; reduce P weakly.',
+          evidence,
+        };
+      }
+      if (gain === 'D' && groupContext.canIncreaseDForOvershoot) {
+        return {
+          percent: WEAK_TUNING_STEP_PERCENT,
+          phenomenon: 'overshoot',
+          confidence: 'low',
+          reason:
+            'Velocity overshoot is high with low noise evidence; increase D with a small step.',
+          evidence,
+        };
+      }
+    }
+    if (loopName === 'position' && gain === 'P') {
+      return {
+        percent: -WEAK_TUNING_STEP_PERCENT,
+        phenomenon: 'overshoot',
+        confidence: 'medium',
+        reason: 'Position overshoot is high; reduce P weakly.',
+        evidence,
+      };
+    }
+  }
+
+  if (primaryPhenomenon === 'delay') {
+    if (loopName === 'rate' && gain === 'P') {
       return {
         percent: DEFAULT_TUNING_STEP_PERCENT,
-        reason: 'Tracking error and delay are high while oscillation is controlled.',
+        phenomenon: 'delay',
+        confidence: 'high',
+        reason: 'Rate tracking error and delay are high while oscillation is controlled.',
+        evidence,
       };
     }
-    if (gain === 'I') {
+    if (
+      (loopName === 'attitude' || loopName === 'velocity' || loopName === 'position') &&
+      gain === 'P'
+    ) {
       return {
-        percent: DEFAULT_TUNING_STEP_PERCENT / 2,
-        reason: 'Tracking error is high; increase integral gain with a smaller step.',
+        percent: WEAK_TUNING_STEP_PERCENT,
+        phenomenon: 'delay',
+        confidence: 'medium',
+        reason: `${loopName} response is slow while upstream loops are usable; increase P weakly.`,
+        evidence,
       };
     }
+  }
+
+  if (primaryPhenomenon === 'steady_error') {
+    if ((loopName === 'rate' || loopName === 'velocity') && gain === 'I') {
+      return {
+        percent: WEAK_TUNING_STEP_PERCENT,
+        phenomenon: 'steady_error',
+        confidence: 'low',
+        reason: `${loopName} tracking error persists without higher-priority phenomena; increase I weakly.`,
+        evidence,
+      };
+    }
+  }
+
+  if (loopName === 'rate' && axisLabel === 'yaw' && gain === 'D') {
+    return {
+      percent: 0,
+      phenomenon: 'yaw_d_guard',
+      confidence: 'high',
+      reason: 'Yaw rate D is not increased automatically by the conservative rule set.',
+      evidence,
+      blocker: 'Yaw rate D automatic increases are disabled.',
+    };
   }
 
   return {
     percent: 0,
+    phenomenon: primaryPhenomenon,
+    confidence: 'low',
     reason: 'No strong metric evidence for changing this parameter.',
+    evidence,
   };
 }
 
@@ -507,15 +830,36 @@ function buildParameterTarget({
   current,
   boundResult,
   metricSummary,
+  loopName,
+  axisLabel,
   gain,
-  actuatorBlocksIncrease,
+  actuatorSaturation,
+  blockers,
+  groupContext,
 }) {
+  if (blockers.length) {
+    return {
+      status: 'blocked',
+      targetValue: null,
+      changePercent: null,
+      reason: blockers[0],
+      blockers,
+      phenomenon: 'blocked',
+      confidence: 'high',
+      evidence: buildMetricEvidence(metricSummary),
+    };
+  }
+
   if (!current) {
     return {
       status: 'missing_current',
       targetValue: null,
       changePercent: null,
       reason: 'Current parameter value was not found in the log.',
+      blockers: ['Current parameter value was not found in the log.'],
+      phenomenon: 'missing_current',
+      confidence: 'high',
+      evidence: buildMetricEvidence(metricSummary),
     };
   }
 
@@ -525,6 +869,10 @@ function buildParameterTarget({
       targetValue: null,
       changePercent: null,
       reason: 'Fill min, max, and max step percent to generate a target value.',
+      blockers: ['Fill min, max, and max step percent to generate a target value.'],
+      phenomenon: 'bounds_required',
+      confidence: 'high',
+      evidence: buildMetricEvidence(metricSummary),
     };
   }
 
@@ -534,16 +882,44 @@ function buildParameterTarget({
       targetValue: null,
       changePercent: null,
       reason: 'Safety bounds are invalid.',
+      blockers: ['Safety bounds are invalid.'],
+      phenomenon: 'invalid_bounds',
+      confidence: 'high',
+      evidence: buildMetricEvidence(metricSummary),
     };
   }
 
-  const step = chooseParameterStep(gain, metricSummary);
-  if (step.percent > 0 && actuatorBlocksIncrease) {
+  const step = chooseParameterStep({
+    loopName,
+    axisLabel,
+    gain,
+    metricSummary,
+    groupContext,
+  });
+
+  if (step.status === 'blocked') {
+    return {
+      status: 'blocked',
+      targetValue: null,
+      changePercent: null,
+      reason: step.reason,
+      blockers: [step.reason],
+      phenomenon: step.phenomenon,
+      confidence: step.confidence,
+      evidence: step.evidence,
+    };
+  }
+
+  if (step.percent > 0 && actuatorSaturation.level !== 'none') {
     return {
       status: 'blocked',
       targetValue: null,
       changePercent: null,
       reason: 'Actuator saturation is high, so gain increases are blocked.',
+      blockers: ['Actuator saturation is high, so gain increases are blocked.'],
+      phenomenon: 'actuator_saturation',
+      confidence: 'high',
+      evidence: step.evidence,
     };
   }
 
@@ -553,6 +929,10 @@ function buildParameterTarget({
       targetValue: roundMetric(current.value, 12),
       changePercent: 0,
       reason: step.reason,
+      blockers: step.blocker ? [step.blocker] : [],
+      phenomenon: step.phenomenon,
+      confidence: step.confidence,
+      evidence: step.evidence,
     };
   }
 
@@ -567,6 +947,10 @@ function buildParameterTarget({
       targetValue: roundMetric(current.value, 12),
       changePercent: 0,
       reason: 'Requested change is constrained by the current value or safety bounds.',
+      blockers: ['Requested change is constrained by the current value or safety bounds.'],
+      phenomenon: step.phenomenon,
+      confidence: step.confidence,
+      evidence: step.evidence,
     };
   }
 
@@ -575,6 +959,10 @@ function buildParameterTarget({
     targetValue: roundMetric(boundedStep.target, 12),
     changePercent: roundMetric(boundedStep.changePercent, 6),
     reason: step.reason,
+    blockers: [],
+    phenomenon: step.phenomenon,
+    confidence: step.confidence,
+    evidence: step.evidence,
   };
 }
 
@@ -1217,11 +1605,158 @@ function buildHints(report) {
   return hints;
 }
 
-function hasHighActuatorSaturation(loops) {
+function getActuatorSaturationState(loops) {
   const metrics = loops?.actuator?.metrics || {};
   const satHighRatio = isFiniteNumber(metrics.sat_high_ratio) ? metrics.sat_high_ratio : 0;
   const satLowRatio = isFiniteNumber(metrics.sat_low_ratio) ? metrics.sat_low_ratio : 0;
-  return Math.max(satHighRatio, satLowRatio) >= ACTUATOR_SATURATION_BLOCK_THRESHOLD;
+  const ratio = Math.max(satHighRatio, satLowRatio);
+  const level =
+    ratio >= ACTUATOR_SATURATION_SEVERE_THRESHOLD
+      ? 'severe'
+      : ratio >= ACTUATOR_SATURATION_BLOCK_THRESHOLD
+        ? 'high'
+        : 'none';
+  return {
+    level,
+    ratio: roundMetric(ratio, 6),
+    blocksIncrease: level !== 'none',
+  };
+}
+
+function getEstimatorBlockers(estimatorQuality) {
+  if (!estimatorQuality || typeof estimatorQuality !== 'object') return [];
+  const positionJumpCount = Number(estimatorQuality.position_jump_count || 0);
+  const velocitySpikeCount = Number(estimatorQuality.velocity_spike_count || 0);
+  if (positionJumpCount > 0 || velocitySpikeCount > 0) {
+    return [
+      'Estimator or feedback signal anomalies were detected; PID recommendations are suppressed.',
+    ];
+  }
+  return [];
+}
+
+function parameterChangedInSegment(parameterProfile, parameter, segment) {
+  if (!isFiniteNumber(segment?.startS) || !isFiniteNumber(segment?.endS)) {
+    return false;
+  }
+  const changedParameters = Array.isArray(parameterProfile?.changedParameters)
+    ? parameterProfile.changedParameters
+    : [];
+  return changedParameters.some((item) => {
+    if (item?.name !== parameter) return false;
+    const timeS = Number(item.timeS);
+    return (
+      Number.isFinite(timeS) &&
+      timeS >= segment.startS - EPS &&
+      timeS <= segment.endS + EPS
+    );
+  });
+}
+
+function getCurrentParameterValueBeforeSegment(parameterProfile, parameter, segment) {
+  const initialParameters =
+    parameterProfile?.initialParameters &&
+    typeof parameterProfile.initialParameters === 'object'
+      ? parameterProfile.initialParameters
+      : {};
+  const changedParameters = Array.isArray(parameterProfile?.changedParameters)
+    ? parameterProfile.changedParameters
+    : [];
+
+  let current = null;
+  const initialValue = Number(initialParameters[parameter]);
+  if (Number.isFinite(initialValue)) {
+    current = {
+      value: initialValue,
+      source: 'initial',
+      timeS: null,
+    };
+  }
+
+  const effectiveStartS = isFiniteNumber(segment?.startS) ? segment.startS : Infinity;
+  for (const item of changedParameters) {
+    if (item?.name !== parameter) continue;
+    const value = Number(item.value);
+    const timeS = Number(item.timeS);
+    if (!Number.isFinite(value) || !Number.isFinite(timeS)) continue;
+    if (timeS - effectiveStartS > EPS) continue;
+    current = {
+      value,
+      source: 'changed',
+      timeS: roundMetric(timeS, 6),
+    };
+  }
+
+  return current;
+}
+
+function getLoopMetricSummaries(loopName, loop) {
+  return (PARAMETER_TUNING_MAP[loopName] || []).map((group) =>
+    summarizeAxisMetrics(loop, group.axes),
+  );
+}
+
+function hasLoopPhenomenonForDownstream(metricSummary) {
+  if (metricSummary.status !== 'available') return true;
+  if (getMetricGateBlockers('loop', 'readiness', metricSummary).length) return true;
+  return getPrimaryPhenomenon(metricSummary) !== 'none';
+}
+
+function assessLoopReadiness(loopName, loop) {
+  if (loopName === 'actuator') {
+    return { healthy: true, reason: null };
+  }
+  if (!loop || loop.status !== 'available') {
+    return {
+      healthy: false,
+      reason: `${loopName} loop is not available for downstream tuning.`,
+    };
+  }
+  const summaries = getLoopMetricSummaries(loopName, loop);
+  if (!summaries.length || summaries.some(hasLoopPhenomenonForDownstream)) {
+    return {
+      healthy: false,
+      reason: `${loopName} loop is not healthy enough for downstream tuning.`,
+    };
+  }
+  return { healthy: true, reason: null };
+}
+
+function getUpstreamBlockers(loopName, loopReadiness) {
+  const requiredUpstream = {
+    attitude: ['rate'],
+    velocity: ['rate', 'attitude'],
+    position: ['rate', 'attitude', 'velocity'],
+  }[loopName] || [];
+
+  return requiredUpstream
+    .map((upstreamLoop) => loopReadiness[upstreamLoop])
+    .filter((state) => state && !state.healthy)
+    .map((state) => state.reason);
+}
+
+function buildGroupContext({
+  loopName,
+  group,
+  metricSummary,
+  currentByParameter,
+  actuatorSaturation,
+}) {
+  const dParameter = group.parameters.find((item) => item.gain === 'D');
+  const hasCurrentD = dParameter
+    ? Boolean(currentByParameter.get(dParameter.parameter))
+    : false;
+  const lowNoise = hasLowNoiseEvidence(metricSummary);
+  const canIncreaseDForOvershoot =
+    hasCurrentD &&
+    lowNoise &&
+    actuatorSaturation.level === 'none' &&
+    !(loopName === 'rate' && group.label === 'yaw');
+
+  return {
+    canIncreaseDForOvershoot,
+    lowNoise,
+  };
 }
 
 function buildLoopParameterTuning({
@@ -1230,12 +1765,15 @@ function buildLoopParameterTuning({
   segment,
   parameterProfile,
   parameterBounds,
-  actuatorBlocksIncrease,
+  actuatorSaturation,
+  globalBlockers,
+  upstreamBlockers,
 }) {
   if (loopName === 'actuator') {
     return {
       status: 'not_applicable',
       parameters: [],
+      blockers: [],
       notes: ['Actuator output has no direct PID parameter mapping.'],
     };
   }
@@ -1243,32 +1781,77 @@ function buildLoopParameterTuning({
   const groups = PARAMETER_TUNING_MAP[loopName] || [];
   const seenParameters = new Set();
   const parameters = [];
+  const loopBlockers = new Set([...globalBlockers, ...upstreamBlockers]);
+
+  if (actuatorSaturation.level === 'severe') {
+    loopBlockers.add(
+      'Severe actuator saturation indicates demand may exceed available control authority; ordinary PID target generation is suppressed.',
+    );
+  }
 
   for (const group of groups) {
     const metricSummary = summarizeAxisMetrics(loop, group.axes);
+    const metricBlockers = getMetricGateBlockers(loopName, group.label, metricSummary);
+    metricBlockers.forEach((blocker) => loopBlockers.add(blocker));
+    const currentByParameter = new Map();
+
+    for (const item of group.parameters) {
+      currentByParameter.set(
+        item.parameter,
+        getCurrentParameterValueBeforeSegment(
+          parameterProfile,
+          item.parameter,
+          segment,
+        ),
+      );
+    }
+
+    const groupContext = buildGroupContext({
+      loopName,
+      group,
+      metricSummary,
+      currentByParameter,
+      actuatorSaturation,
+    });
 
     for (const item of group.parameters) {
       if (seenParameters.has(item.parameter)) continue;
       seenParameters.add(item.parameter);
 
-      const current = getCurrentParameterValue(
-        parameterProfile,
-        item.parameter,
-        segment.endS,
-      );
+      const current = currentByParameter.get(item.parameter);
       const targetable = item.targetable !== false;
       const boundResult = targetable
         ? parseParameterBound(parameterBounds, item.parameter)
         : { status: 'not_applicable', value: null };
+      const parameterBlockers = [
+        ...globalBlockers,
+        ...upstreamBlockers,
+        ...(actuatorSaturation.level === 'severe'
+          ? [
+              'Severe actuator saturation indicates demand may exceed available control authority; ordinary PID target generation is suppressed.',
+            ]
+          : []),
+        ...metricBlockers,
+      ];
+      if (parameterChangedInSegment(parameterProfile, item.parameter, segment)) {
+        parameterBlockers.push(
+          `${item.parameter} changed inside the analysis window; PID recommendation is suppressed.`,
+        );
+      }
       const target = targetable
         ? buildParameterTarget({
             current,
             boundResult,
             metricSummary,
+            loopName,
+            axisLabel: group.label,
             gain: item.gain,
-            actuatorBlocksIncrease,
+            actuatorSaturation,
+            blockers: uniqueStrings(parameterBlockers),
+            groupContext,
           })
         : buildDisplayOnlyParameterTarget(current);
+      (target.blockers || []).forEach((blocker) => loopBlockers.add(blocker));
       const currentValue = current ? roundMetric(current.value, 12) : null;
       const shouldInclude =
         target.status === 'target_generated' &&
@@ -1299,37 +1882,55 @@ function buildLoopParameterTuning({
     }
   }
 
+  const blockers = [...loopBlockers];
   return {
     status: parameters.length ? 'available' : 'no_recommendation',
     parameters,
+    blockers,
     notes: [],
   };
 }
 
-function buildParameterTuning({ loops, segment, parameterProfile, parameterBounds }) {
-  const actuatorBlocksIncrease = hasHighActuatorSaturation(loops);
+function buildParameterTuning({
+  loops,
+  segment,
+  parameterProfile,
+  parameterBounds,
+  estimatorQuality,
+}) {
+  const actuatorSaturation = getActuatorSaturationState(loops);
+  const globalBlockers = getEstimatorBlockers(estimatorQuality);
   const result = {
-    actuatorBlocksIncrease,
+    actuatorBlocksIncrease: actuatorSaturation.blocksIncrease,
+    actuatorSaturationLevel: actuatorSaturation.level,
     loops: {},
     warnings: [],
   };
+  const loopReadiness = {};
 
   for (const loopName of LOOP_ORDER) {
+    const upstreamBlockers = getUpstreamBlockers(loopName, loopReadiness);
     result.loops[loopName] = buildLoopParameterTuning({
       loopName,
       loop: loops[loopName],
       segment,
       parameterProfile,
       parameterBounds,
-      actuatorBlocksIncrease,
+      actuatorSaturation,
+      globalBlockers,
+      upstreamBlockers,
     });
+    if (loopName !== 'actuator') {
+      loopReadiness[loopName] = assessLoopReadiness(loopName, loops[loopName]);
+    }
   }
 
-  if (actuatorBlocksIncrease) {
+  if (actuatorSaturation.blocksIncrease) {
     result.warnings.push(
       'Actuator saturation is high; target generation blocks gain increases.',
     );
   }
+  result.warnings.push(...globalBlockers);
 
   return result;
 }
@@ -1377,6 +1978,7 @@ function buildControlQualityReport(stored, options = {}) {
       segment,
       parameterProfile: stored?.parameterProfile,
       parameterBounds: options.parameterBounds,
+      estimatorQuality,
     }),
     estimator_quality: estimatorQuality,
     missing_topics: missingTopics,

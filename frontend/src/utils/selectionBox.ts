@@ -19,6 +19,13 @@ export type ChartSelectionControlSegment = {
   }
 }
 
+export type SelectableChartPixelProbe = {
+  containPixel?: (
+    finder: Record<string, unknown>,
+    value: [number, number],
+  ) => boolean
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -94,6 +101,25 @@ export function isValidTimeSelectionBox(
       : 0
 
   return box.width >= threshold
+}
+
+export function isSelectableChartPoint(
+  chart: SelectableChartPixelProbe | null | undefined,
+  point: SelectionPoint | null | undefined,
+) {
+  if (!point || !isFiniteNumber(point.x) || !isFiniteNumber(point.y)) {
+    return false
+  }
+
+  if (!chart || typeof chart.containPixel !== 'function') {
+    return true
+  }
+
+  try {
+    return chart.containPixel({ gridIndex: 0 }, [point.x, point.y])
+  } catch {
+    return false
+  }
 }
 
 export function ensureVisibleSelectionBox(

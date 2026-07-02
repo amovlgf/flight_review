@@ -29,11 +29,16 @@ import type {
   ControlQualityParameterBound,
   ControlQualityReport,
   IncidentAnalysisResponse,
-  IncidentTimelineEvent,
 } from './types/log'
+import {
+  buildControlQualitySegment,
+  createControlQualityRequestTracker,
+} from './utils/controlQualityRequest'
+import type { ControlQualityRequestTracker } from './utils/controlQualityRequest'
 import {
   buildChartSelectionControlSegment,
   ensureVisibleSelectionBox,
+  isSelectableChartPoint,
   isValidTimeSelectionBox,
   normalizeSelectionBox,
   shouldShowSelectionPreview,
@@ -61,6 +66,10 @@ type ChartInstance = {
     finder: Record<string, unknown>,
     value: number | number[],
   ) => number | number[]
+  containPixel?: (
+    finder: Record<string, unknown>,
+    value: [number, number],
+  ) => boolean
   dispatchAction: (action: ChartAction) => void
   on: (eventName: 'datazoom', handler: () => void) => void
   off: (eventName: 'datazoom', handler: () => void) => void
@@ -73,7 +82,7 @@ type ChartRegistryItem = {
   rangeGroupKey?: string
 }
 
-type ControlQualityLinkedRange = {
+type ControlQualityVisibleRange = {
   startS: number
   endS: number
 }
@@ -88,34 +97,6 @@ type ControlAnalysisReportItem = {
   report: ControlQualityReport | null
   isLoading: boolean
   errorText: string
-}
-
-type IncidentEvidenceFocus = {
-  eventId: string
-  chartTopic: string
-  seriesName: string
-  label: string
-  startS: number
-  endS: number
-  targetTimeS: number
-}
-
-function mapIncidentChartGroupsToTopicCharts(
-  report: IncidentAnalysisResponse,
-): TopicChart[] {
-  return Array.isArray(report.chartGroups)
-    ? report.chartGroups.map((group) => ({
-        topic: group.id,
-        title: group.title,
-        series: Array.isArray(group.series)
-          ? group.series.map((item) => ({
-              name: item.label || item.id,
-              unit: item.unit || '',
-              points: item.points,
-            }))
-          : [],
-      }))
-    : []
 }
 
 const PAGE_SIZE = 8
@@ -148,16 +129,6 @@ function timeValueToPercent(value: number, timeRange: ChartTimeRange) {
   const span = timeRange.end - timeRange.start
   if (span <= 0) return 0
   return clampPercent(((value - timeRange.start) / span) * 100)
-}
-
-function findChartWrapElementByTopic(topic: string) {
-  if (!topic || typeof document === 'undefined') return null
-
-  return (
-    Array.from(document.querySelectorAll<HTMLElement>('.chart-wrap[data-topic]')).find(
-      (item) => item.dataset.topic === topic,
-    ) ?? null
-  )
 }
 
 function normalizePixelTimeValue(value: number | number[]) {
@@ -199,6 +170,11 @@ function App() {
   const timelinePointerRef = useRef<number | null>(null)
   const isTimelinePlayingRef = useRef(false)
   const activeTimelineChartKeyRef = useRef<string | null>(null)
+  const controlQualityRequestTrackerRef =
+    useRef<ControlQualityRequestTracker | null>(null)
+  if (controlQualityRequestTrackerRef.current === null) {
+    controlQualityRequestTrackerRef.current = createControlQualityRequestTracker()
+  }
   const [selectedFileName, setSelectedFileName] = useState('')
   const [isUploading, setIsUploading] = useState(false)
   const [selectedLogId, setSelectedLogId] = useState('')
@@ -208,10 +184,6 @@ function App() {
   )
   const [seriesData, setSeriesData] = useState<ChartSeries[]>([])
   const [topicCharts, setTopicCharts] = useState<TopicChart[]>([])
-  const [evidenceTopicCharts, setEvidenceTopicCharts] = useState<TopicChart[]>([])
-  const [evidenceChartHint, setEvidenceChartHint] = useState(
-    '运行日志分析后展示事件证据图表。',
-  )
   const [modeSegments, setModeSegments] = useState<ModeSegment[]>([])
   const [diagnostics, setDiagnostics] = useState<DiagnosticItem[]>([])
   const [incidentAnalysisReport, setIncidentAnalysisReport] =
@@ -219,8 +191,6 @@ function App() {
   const [isIncidentAnalysisLoading, setIsIncidentAnalysisLoading] =
     useState(false)
   const [incidentAnalysisError, setIncidentAnalysisError] = useState('')
-  const [incidentEvidenceFocus, setIncidentEvidenceFocus] =
-    useState<IncidentEvidenceFocus | null>(null)
   const [logList, setLogList] = useState<
     Array<{ logId: string; fileName: string; uploadedAt: string }>
   >([])
@@ -241,8 +211,8 @@ function App() {
     ControlAnalysisReportItem[]
   >([])
   const controlAnalysisReportsRef = useRef<ControlAnalysisReportItem[]>([])
-  const [controlQualityLinkedRanges, setControlQualityLinkedRanges] = useState<
-    Record<string, ControlQualityLinkedRange>
+  const [controlQualityVisibleRanges, setControlQualityVisibleRanges] = useState<
+    Record<string, ControlQualityVisibleRange>
   >({})
   const [selectionBox, setSelectionBox] = useState<ChartSelectionPreview | null>(
     null,
@@ -358,13 +328,10 @@ function App() {
       setStatusText('\u6b63\u5728\u4e0a\u4f20...')
       setSeriesData([])
       setTopicCharts([])
-      setEvidenceTopicCharts([])
-      setEvidenceChartHint('运行日志分析后展示事件证据图表。')
       setModeSegments([])
       setDiagnostics([])
       setIncidentAnalysisReport(null)
       setIncidentAnalysisError('')
-      setIncidentEvidenceFocus(null)
       setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
       setActiveLogMeta(null)
       setSelectionBox(null)
@@ -390,13 +357,10 @@ function App() {
     } catch {
       setSeriesData([])
       setTopicCharts([])
-      setEvidenceTopicCharts([])
-      setEvidenceChartHint('运行日志分析后展示事件证据图表。')
       setModeSegments([])
       setDiagnostics([])
       setIncidentAnalysisReport(null)
       setIncidentAnalysisError('')
-      setIncidentEvidenceFocus(null)
       setActiveLogMeta(null)
       setSelectionBox(null)
       setStatusText('\u4e0a\u4f20\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u540e\u7aef\u662f\u5426\u542f\u52a8\u3002')
@@ -437,8 +401,11 @@ function App() {
 
   const handleEnterControlAnalysis = () => {
     setViewMode('control-analysis')
+    controlAnalysisReportsRef.current.forEach((item) => {
+      controlQualityRequestTrackerRef.current?.invalidate(item.clientId)
+    })
     setControlAnalysisReports([])
-    setControlQualityLinkedRanges({})
+    setControlQualityVisibleRanges({})
     setControlAnalysisStatusText('')
     setControlAnalysisFiles([])
     if (controlAnalysisFileInputRef.current) {
@@ -496,8 +463,11 @@ function App() {
       setControlAnalysisStatusText(
         `\u6b63\u5728\u4e00\u6b21\u6027\u4e0a\u4f20 ${files.length} \u4efd\u65e5\u5fd7\u5e76\u8ba1\u7b97\u63a7\u5236\u73af\u6307\u6807...`,
       )
+      controlAnalysisReportsRef.current.forEach((item) => {
+        controlQualityRequestTrackerRef.current?.invalidate(item.clientId)
+      })
       setControlAnalysisReports(nextItems)
-      setControlQualityLinkedRanges({})
+      setControlQualityVisibleRanges({})
 
       const result = await batchCalculateControlQuality(files)
       const reports = Array.isArray(result.reports) ? result.reports : []
@@ -540,6 +510,8 @@ function App() {
     segment?: { startS: number | null; endS: number | null; source?: string },
     parameterBounds?: Record<string, ControlQualityParameterBound>,
   ): Promise<boolean> => {
+    const requestId =
+      controlQualityRequestTrackerRef.current?.begin(clientId) ?? 0
     setControlAnalysisReports((currentItems) =>
       currentItems.map((item) =>
         item.clientId === clientId
@@ -554,6 +526,11 @@ function App() {
         segment,
         parameterBounds,
       })
+      if (
+        !controlQualityRequestTrackerRef.current?.isLatest(clientId, requestId)
+      ) {
+        return false
+      }
       setControlAnalysisReports((currentItems) =>
         currentItems.map((item) =>
           item.clientId === clientId
@@ -563,6 +540,11 @@ function App() {
       )
       return true
     } catch {
+      if (
+        !controlQualityRequestTrackerRef.current?.isLatest(clientId, requestId)
+      ) {
+        return false
+      }
       setControlAnalysisReports((currentItems) =>
         currentItems.map((item) =>
           item.clientId === clientId
@@ -631,7 +613,6 @@ function App() {
       setModeSegments([])
       setActiveLogMeta(null)
       setSelectionBox(null)
-      setIncidentEvidenceFocus(null)
       void loadLogList({ preferLogId: '' })
       setChartHint(
         '\u56fe\u8868\u6570\u636e\u8bf7\u6c42\u5931\u8d25\uff08\u53ef\u80fd\u662f\u65e5\u5fd7\u5df2\u5931\u6548\uff0c\u8bf7\u5237\u65b0\u5217\u8868\u6216\u91cd\u65b0\u4e0a\u4f20\uff09',
@@ -645,23 +626,10 @@ function App() {
     try {
       setIsIncidentAnalysisLoading(true)
       setIncidentAnalysisError('')
-      setIncidentEvidenceFocus(null)
-      setEvidenceTopicCharts([])
-      setEvidenceChartHint('正在生成事件证据图表...')
       const report = await runIncidentAnalysis(logId)
       setIncidentAnalysisReport(report)
-      const incidentTopicCharts = mapIncidentChartGroupsToTopicCharts(report)
-      if (incidentTopicCharts.length > 0) {
-        setEvidenceTopicCharts(incidentTopicCharts)
-        setEvidenceChartHint('已加载事件证据图表。')
-      } else {
-        setEvidenceChartHint('当前日志没有可展示的事件证据图表。')
-      }
     } catch {
       setIncidentAnalysisReport(null)
-      setIncidentEvidenceFocus(null)
-      setEvidenceTopicCharts([])
-      setEvidenceChartHint('事件证据图表不可用。')
       setIncidentAnalysisError(
         '\u65e5\u5fd7\u5206\u6790\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u5df2\u542f\u52a8\u4e14\u65e5\u5fd7\u4ecd\u5728\u5f53\u524d\u4f1a\u8bdd\u4e2d\u3002',
       )
@@ -679,13 +647,10 @@ function App() {
     setSelectedLogId(logId)
     setSeriesData([])
     setTopicCharts([])
-    setEvidenceTopicCharts([])
-    setEvidenceChartHint('运行日志分析后展示事件证据图表。')
     setModeSegments([])
     setDiagnostics([])
     setIncidentAnalysisReport(null)
     setIncidentAnalysisError('')
-    setIncidentEvidenceFocus(null)
     setActiveLogMeta(null)
     setSelectionBox(null)
     if (logId) {
@@ -702,11 +667,26 @@ function App() {
     endS: number | null,
   ) => {
     if (!item.logId) return
-    await loadControlQualityForItem(item.clientId, item.logId, {
-      startS,
-      endS,
-      source: startS !== null && endS !== null ? 'manual' : 'auto',
+    const segment = buildControlQualitySegment(startS, endS, 'manual')
+    setControlQualityVisibleRanges((current) => {
+      if (
+        typeof segment.startS !== 'number' ||
+        typeof segment.endS !== 'number'
+      ) {
+        const next = { ...current }
+        delete next[item.clientId]
+        return next
+      }
+
+      return {
+        ...current,
+        [item.clientId]: {
+          startS: segment.startS,
+          endS: segment.endS,
+        },
+      }
     })
+    await loadControlQualityForItem(item.clientId, item.logId, segment)
   }
 
   const handleControlQualityChartSelection = useCallback((
@@ -723,7 +703,7 @@ function App() {
       return
     }
 
-    setControlQualityLinkedRanges((current) => ({
+    setControlQualityVisibleRanges((current) => ({
       ...current,
       [controlSegment.rangeGroupKey]: {
         startS: controlSegment.segment.startS,
@@ -749,12 +729,9 @@ function App() {
     await loadLogList({ page: 1, keyword: searchKeyword })
     setSeriesData([])
     setTopicCharts([])
-    setEvidenceTopicCharts([])
-    setEvidenceChartHint('运行日志分析后展示事件证据图表。')
     setDiagnostics([])
     setIncidentAnalysisReport(null)
     setIncidentAnalysisError('')
-    setIncidentEvidenceFocus(null)
     setActiveLogMeta(null)
     setChartHint('\u65e5\u5fd7\u5217\u8868\u5df2\u66f4\u65b0\uff0c\u8bf7\u9009\u62e9\u65e5\u5fd7\u540e\u67e5\u770b\u56fe\u8868\u3002')
   }
@@ -909,123 +886,6 @@ function App() {
     return nextTime
   }, [getTimelineBounds, hideTimelineCursor, showTimelineCursor])
 
-  const findMatchingChartTopic = useCallback((chartTopic: string, chartGroupId?: string) => {
-    if (chartGroupId) {
-      const groupMatch = evidenceTopicCharts.find((item) => item.topic === chartGroupId)
-      if (groupMatch) return groupMatch.topic
-    }
-
-    if (!chartTopic) return ''
-
-    const exactMatch = evidenceTopicCharts.find((item) => item.topic === chartTopic)
-    if (exactMatch) return exactMatch.topic
-
-    const prefixedMatch = evidenceTopicCharts.find(
-      (item) =>
-        item.topic.startsWith(`${chartTopic}_`) ||
-        chartTopic.startsWith(`${item.topic}_`),
-    )
-
-    return prefixedMatch?.topic ?? chartTopic
-  }, [evidenceTopicCharts])
-
-  const zoomChartsToTimeWindow = useCallback((startS: number, endS: number) => {
-    const safeStartS = Math.min(startS, endS)
-    const safeEndS = Math.max(startS, endS)
-
-    chartRegistryRef.current.forEach((item, chartKey) => {
-      if (isChartDisposed(item.chart)) {
-        chartRegistryRef.current.delete(chartKey)
-        chartCleanupRef.current.delete(chartKey)
-        return
-      }
-
-      const start = timeValueToPercent(safeStartS, item.timeRange)
-      const end = timeValueToPercent(safeEndS, item.timeRange)
-
-      try {
-        item.chart.dispatchAction({
-          type: 'dataZoom',
-          dataZoomIndex: 0,
-          start,
-          end,
-        })
-      } catch {
-        chartRegistryRef.current.delete(chartKey)
-        chartCleanupRef.current.delete(chartKey)
-      }
-    })
-  }, [])
-
-  const scrollIncidentEvidenceIntoView = useCallback((
-    focus: IncidentEvidenceFocus,
-  ) => {
-    const targetEntry = Array.from(chartRegistryRef.current.entries()).find(
-      ([chartKey]) => chartKey.startsWith(`${focus.chartTopic}__`),
-    )
-    const registryElement = targetEntry?.[1]?.chart.getDom()?.closest('.chart-wrap')
-    const targetElement =
-      registryElement instanceof HTMLElement
-        ? registryElement
-        : findChartWrapElementByTopic(focus.chartTopic)
-
-    targetElement?.scrollIntoView({ behavior: 'auto', block: 'start' })
-  }, [])
-
-  const applyIncidentEvidenceFocus = useCallback((
-    focus: IncidentEvidenceFocus,
-  ) => {
-    zoomChartsToTimeWindow(focus.startS, focus.endS)
-    setTimelineTime(focus.targetTimeS)
-    scrollIncidentEvidenceIntoView(focus)
-  }, [scrollIncidentEvidenceIntoView, setTimelineTime, zoomChartsToTimeWindow])
-
-  const focusIncidentTimelineEvent = useCallback((event: IncidentTimelineEvent) => {
-    const link = event.evidenceLinks?.[0]
-    if (!link) {
-      setIncidentEvidenceFocus(null)
-      return
-    }
-
-    const startS = link.timeWindow?.startS ?? Math.max(0, event.timeS - 3)
-    const endS = link.timeWindow?.endS ?? event.timeS + 5
-    const chartTopic = findMatchingChartTopic(
-      link.chartTopic || link.source.topic,
-      link.chartGroupId,
-    )
-    const seriesName = link.seriesId || link.standardSignal || link.source.field
-    const targetTimeS = link.targetTimeS ?? event.timeS
-    const nextFocus = {
-      eventId: event.id,
-      chartTopic,
-      seriesName,
-      label: `${event.code} / ${link.standardSignal}`,
-      startS,
-      endS,
-      targetTimeS,
-    }
-
-    setIsTimelinePlaying(false)
-    setIncidentEvidenceFocus(nextFocus)
-    window.setTimeout(() => scrollIncidentEvidenceIntoView(nextFocus), 0)
-  }, [findMatchingChartTopic, scrollIncidentEvidenceIntoView])
-
-  useEffect(() => {
-    if (!incidentEvidenceFocus) {
-      return undefined
-    }
-
-    const timerIds = [0, 40, 100, 180, 300, 500, 760].map((delay) =>
-      window.setTimeout(() => {
-        applyIncidentEvidenceFocus(incidentEvidenceFocus)
-      }, delay),
-    )
-
-    return () => {
-      timerIds.forEach((timerId) => window.clearTimeout(timerId))
-    }
-  }, [applyIncidentEvidenceFocus, incidentEvidenceFocus])
-
   const moveTimelinePointer = useCallback((
     direction: -1 | 1,
     isCoarseStep = false,
@@ -1076,10 +936,10 @@ function App() {
       source.timeRange,
     )
     const sourceEndTime = percentToTimeValue(sourceEndPercent, source.timeRange)
-    const nextLinkedRanges: Record<string, ControlQualityLinkedRange> = {}
+    const nextVisibleRanges: Record<string, ControlQualityVisibleRange> = {}
 
     if (source.rangeGroupKey) {
-      nextLinkedRanges[source.rangeGroupKey] = {
+      nextVisibleRanges[source.rangeGroupKey] = {
         startS: Math.min(sourceStartTime, sourceEndTime),
         endS: Math.max(sourceStartTime, sourceEndTime),
       }
@@ -1099,7 +959,7 @@ function App() {
       if (target.rangeGroupKey) {
         const targetStartTime = percentToTimeValue(targetStart, target.timeRange)
         const targetEndTime = percentToTimeValue(targetEnd, target.timeRange)
-        nextLinkedRanges[target.rangeGroupKey] = {
+        nextVisibleRanges[target.rangeGroupKey] = {
           startS: Math.min(targetStartTime, targetEndTime),
           endS: Math.max(targetStartTime, targetEndTime),
         }
@@ -1121,10 +981,10 @@ function App() {
       isSyncingZoomRef.current = false
     }, 0)
 
-    if (Object.keys(nextLinkedRanges).length > 0) {
-      setControlQualityLinkedRanges((current) => ({
+    if (Object.keys(nextVisibleRanges).length > 0) {
+      setControlQualityVisibleRanges((current) => ({
         ...current,
-        ...nextLinkedRanges,
+        ...nextVisibleRanges,
       }))
     }
   }, [])
@@ -1475,12 +1335,17 @@ function App() {
     const onMouseDown = (event: MouseEvent) => {
       activeTimelineChartKeyRef.current = chartKey
       if (event.button === 0) {
+        const startPoint = getClampedChartPoint(event.clientX, event.clientY)
+        if (!isSelectableChartPoint(chart, startPoint)) {
+          clearLeftSelectionState()
+          return
+        }
+
         if (hasPendingClickSelection && !isLeftPointerDown) {
           finishLeftSelection(event.clientX, event.clientY)
           return
         }
 
-        const startPoint = getClampedChartPoint(event.clientX, event.clientY)
         selectStartX = startPoint.x
         selectStartY = startPoint.y
         pointerDownX = startPoint.x
@@ -1635,7 +1500,7 @@ function App() {
       if (rangeGroupKey) {
         const startTime = percentToTimeValue(start, timeRange)
         const endTime = percentToTimeValue(end, timeRange)
-        setControlQualityLinkedRanges((current) => ({
+        setControlQualityVisibleRanges((current) => ({
           ...current,
           [rangeGroupKey]: {
             startS: Math.min(startTime, endTime),
@@ -1839,37 +1704,7 @@ function App() {
               selectionBox={selectionBox}
               onChartReady={bindChartInteractions}
               onChartDispose={handleChartDispose}
-              onEventFocus={focusIncidentTimelineEvent}
             />
-            <section className="incident-section evidence-chart-section">
-              <h3>证据图表</h3>
-              <ChartPanel
-                activeLogMeta={activeLogMeta}
-                topicCharts={evidenceTopicCharts}
-                seriesData={[]}
-                modeSegments={modeSegments}
-                diagnostics={[]}
-                selectionBox={selectionBox}
-                timelinePointer={timelinePointer}
-                isTimelinePlaying={isTimelinePlaying}
-                activeChartTopic={incidentEvidenceFocus?.chartTopic}
-                activeSeriesName={incidentEvidenceFocus?.seriesName}
-                activeChartBadgeLabel={
-                  incidentEvidenceFocus
-                    ? `${incidentEvidenceFocus.label} @ ${incidentEvidenceFocus.targetTimeS.toFixed(2)}s`
-                    : undefined
-                }
-                chartHint={evidenceChartHint}
-                showDefaultSeriesFallback={false}
-                onChartReady={bindChartInteractions}
-                onChartDispose={handleChartDispose}
-                onTimelineSeek={(timeValue) => {
-                  setIsTimelinePlaying(false)
-                  setTimelineTime(timeValue)
-                }}
-                onToggleTimelinePlayback={toggleTimelinePlayback}
-              />
-            </section>
             <AdvancedRawDataPanel>
               <ChartPanel
                 activeLogMeta={activeLogMeta}
@@ -1974,9 +1809,14 @@ function App() {
                   type="button"
                   className="button"
                   onClick={() => {
+                    controlAnalysisReportsRef.current.forEach((item) => {
+                      controlQualityRequestTrackerRef.current?.invalidate(
+                        item.clientId,
+                      )
+                    })
                     setControlAnalysisFiles([])
                     setControlAnalysisReports([])
-                    setControlQualityLinkedRanges({})
+                    setControlQualityVisibleRanges({})
                     setControlAnalysisStatusText('')
                   }}
                   disabled={isControlAnalysisUploading || controlAnalysisFiles.length === 0}
@@ -2031,7 +1871,7 @@ function App() {
                       selectionBox={selectionBox}
                       timelinePointer={timelinePointer}
                       isTimelinePlaying={isTimelinePlaying}
-                      linkedRange={controlQualityLinkedRanges[item.clientId]}
+                      visibleRange={controlQualityVisibleRanges[item.clientId]}
                       isLoading={item.isLoading}
                       errorText={item.errorText}
                       onChartReady={bindChartInteractions}

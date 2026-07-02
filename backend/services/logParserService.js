@@ -155,6 +155,15 @@ function buildDefaultParameterProfile() {
   };
 }
 
+function buildFallbackSeedInput(fileName, metadata) {
+  return [
+    fileName || '',
+    Number(metadata?.fileSizeBytes || 0),
+    Number(metadata?.version || 0),
+    Number(metadata?.logStartTimestampUs || 0),
+  ].join('-');
+}
+
 function normalizeUnlockSummary(parsed) {
   if (!parsed || typeof parsed !== 'object') {
     return buildDefaultUnlockSummary();
@@ -324,7 +333,7 @@ function seriesArrayToMap(seriesArray) {
 function buildParsedLog(filePath, fileName, options = {}) {
   const metadata = parseUlogHeader(filePath);
   const logId = randomUUID();
-  const seed = buildFallbackSeed(`${fileName}-${logId}`);
+  const seed = buildFallbackSeed(buildFallbackSeedInput(fileName, metadata));
   const fallbackSeriesMap = generateFallbackTimeSeries(metadata, seed);
   const parsedResult = parseOrFallbackSeries(filePath, fallbackSeriesMap, options);
   const topicCharts = parsedResult.topicCharts;
@@ -383,7 +392,7 @@ function ensureStoredLogParsed(stored) {
   ) {
     const fallbackSeriesMap = generateFallbackTimeSeries(
       stored.metadata,
-      buildFallbackSeed(`${stored.fileName}-${stored.logId}`),
+      buildFallbackSeed(buildFallbackSeedInput(stored.fileName, stored.metadata)),
     );
     const reparsed = parseOrFallbackSeries(stored.storedPath, fallbackSeriesMap);
     const diagnostics = buildDiagnostics(

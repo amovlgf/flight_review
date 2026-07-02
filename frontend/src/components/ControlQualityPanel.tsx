@@ -17,7 +17,7 @@ type ControlQualityPanelProps = {
   selectionBox?: ChartSelectionPreview | null
   timelinePointer?: number | null
   isTimelinePlaying?: boolean
-  linkedRange?: {
+  visibleRange?: {
     startS: number
     endS: number
   }
@@ -85,6 +85,8 @@ const SOURCE_LABELS: Record<string, string> = {
   manual: '手动区间',
   auto: '自动区间',
 }
+
+SOURCE_LABELS.chart_selection = '\u6846\u9009\u5206\u6790\u533a\u95f4'
 
 const HINT_LABELS: Record<string, string> = {
   'Position tracking error is more prominent than velocity tracking. Review position setpoint smoothness and local position jumps.':
@@ -713,6 +715,7 @@ function ParameterTuningSection({
 }: {
   tuning?: ControlQualityLoopParameterTuning
 }) {
+  const blockers = tuning?.blockers?.filter(Boolean) ?? []
   const parameters = (tuning?.parameters ?? []).filter(
     (item) =>
       item.status === 'target_generated' &&
@@ -737,7 +740,15 @@ function ParameterTuningSection({
     return (
       <div className="control-parameter-panel">
         <h5 className="tuning-subtitle">PID 推荐参数</h5>
-        <p className="hint">当前区间未发现需要调整的 PID 参数。</p>
+        {blockers.length ? (
+          <ul className="tuning-alert-list">
+            {blockers.map((blocker) => (
+              <li key={blocker}>{blocker}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="hint">当前区间未发现需要调整的 PID 参数。</p>
+        )}
       </div>
     )
   }
@@ -1047,7 +1058,7 @@ function ControlQualityPanel({
   selectionBox,
   timelinePointer,
   isTimelinePlaying = false,
-  linkedRange,
+  visibleRange,
   report,
   isLoading,
   errorText,
@@ -1057,17 +1068,15 @@ function ControlQualityPanel({
   onToggleTimelinePlayback,
   onApplyRange,
 }: ControlQualityPanelProps) {
-  const initialStart =
-    linkedRange?.startS ?? report?.analysis_time_range.start_s ?? null
-  const initialEnd =
-    linkedRange?.endS ?? report?.analysis_time_range.end_s ?? null
+  const initialStart = report?.analysis_time_range.start_s ?? null
+  const initialEnd = report?.analysis_time_range.end_s ?? null
   const initialStartValue = formatRangeInputValue(initialStart)
   const initialEndValue = formatRangeInputValue(initialEnd)
   const rangeKey = `${initialStartValue}-${initialEndValue}`
-  const linkedAnalysisRange = linkedRange
+  const visibleAnalysisRange = visibleRange
     ? {
-        startS: linkedRange.startS,
-        endS: linkedRange.endS,
+        startS: visibleRange.startS,
+        endS: visibleRange.endS,
       }
     : null
   const [highlightedLoop, setHighlightedLoop] = useState<LoopName | null>(null)
@@ -1186,7 +1195,7 @@ function ControlQualityPanel({
               selectionBox={selectionBox}
               timelinePointer={timelinePointer}
               isTimelinePlaying={isTimelinePlaying}
-              visibleRange={linkedAnalysisRange}
+              visibleRange={visibleAnalysisRange}
               loop={report.loops.actuator}
               parameterTuning={report.parameterTuning?.loops.actuator}
               isHighlighted={highlightedLoop === 'actuator'}
@@ -1203,7 +1212,7 @@ function ControlQualityPanel({
                 selectionBox={selectionBox}
                 timelinePointer={timelinePointer}
                 isTimelinePlaying={isTimelinePlaying}
-                visibleRange={linkedAnalysisRange}
+                visibleRange={visibleAnalysisRange}
                 loopName={loopName}
                 loop={report.loops[loopName]}
                 parameterTuning={report.parameterTuning?.loops[loopName]}

@@ -36,7 +36,6 @@ type IncidentAnalysisPanelProps = {
     timeRange: ChartTimeRange,
   ) => void
   onChartDispose?: (chartKey: string) => void
-  onEventFocus?: (event: IncidentTimelineEvent) => void
 }
 
 const capabilityLabels: Array<
@@ -715,6 +714,512 @@ function TimelineEventItem({
   )
 }
 
+function IncidentOverviewSummary({
+  report,
+}: {
+  report: IncidentAnalysisResponse
+}) {
+  const anomalySummary = report.anomalySummary
+
+  return (
+    <div className="incident-section incident-overview-section">
+      <h4>关键摘要</h4>
+      <div className="incident-summary-grid incident-key-summary-grid">
+        <div>
+          <span>数据质量</span>
+          <strong className={`quality-level quality-${report.dataQuality.level}`}>
+            {formatQualityLevel(report.dataQuality.level)}
+          </strong>
+        </div>
+        <div>
+          <span>日志时长</span>
+          <strong>{formatSeconds(report.flightSummary.durationS)}</strong>
+        </div>
+        <div>
+          <span>解锁飞行时长</span>
+          <strong>{formatSeconds(report.flightSummary.armedFlightTimeS)}</strong>
+        </div>
+        <div>
+          <span>解锁次数</span>
+          <strong>{report.flightSummary.unlockCount ?? '不可用'}</strong>
+        </div>
+        {anomalySummary ? (
+          <>
+            <div>
+              <span>异常状态</span>
+              <strong>{formatAnomalyStatus(anomalySummary.status)}</strong>
+            </div>
+            <div>
+              <span>最早异常</span>
+              <strong>{formatSeconds(anomalySummary.earliestAnomalyTimeS)}</strong>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function IncidentAnomalySummarySection({
+  report,
+  modeSegments,
+  selectionBox,
+  expandedEvidenceEventIds,
+  onToggleEvidenceChart,
+  onChartReady,
+  onChartDispose,
+}: {
+  report: IncidentAnalysisResponse
+  modeSegments: ModeSegment[]
+  selectionBox?: ChartSelectionPreview | null
+  expandedEvidenceEventIds: string[]
+  onToggleEvidenceChart: (eventId: string) => void
+  onChartReady?: IncidentAnalysisPanelProps['onChartReady']
+  onChartDispose?: IncidentAnalysisPanelProps['onChartDispose']
+}) {
+  const anomalySummary = report.anomalySummary
+  if (!anomalySummary) return null
+
+  return (
+    <div className="incident-section incident-anomaly-section">
+      <h4>异常摘要</h4>
+      <p className="hint">
+        异常提示：仅汇总日志明确记录的异常旗标和保守检测结果，不输出根因、硬件故障或事故概率。
+      </p>
+      <div className="incident-summary-grid incident-anomaly-summary-grid">
+        <div>
+          <span>检测状态</span>
+          <strong>{formatAnomalyStatus(anomalySummary.status)}</strong>
+        </div>
+        <div>
+          <span>最高等级</span>
+          <strong>{formatAnomalySeverity(anomalySummary.severity)}</strong>
+        </div>
+        <div>
+          <span>最早异常</span>
+          <strong>{formatSeconds(anomalySummary.earliestAnomalyTimeS)}</strong>
+        </div>
+      </div>
+
+      {anomalySummary.findings.length > 0 ? (
+        <ul className="compact-list incident-anomaly-list">
+          {anomalySummary.findings.map((finding) => {
+            const event = anomalyFindingToTimelineEvent(finding)
+            const isChartExpanded = expandedEvidenceEventIds.includes(finding.id)
+
+            return (
+              <li key={finding.id}>
+                <strong>{finding.title}</strong>
+                {'：'}
+                {finding.summary}
+                {'；时间：'}
+                {formatSeconds(finding.startTimeS)}
+                {' - '}
+                {formatSeconds(finding.endTimeS)}
+                {'；证据信号：'}
+                {finding.evidenceSignals.join(', ') || '暂无'}
+                {finding.missingSignals.length > 0
+                  ? `；缺失：${finding.missingSignals.join(', ')}`
+                  : ''}
+                {(finding.evidenceLinks?.length ?? 0) > 0 ? (
+                  <div className="incident-group-actions">
+                    <button
+                      type="button"
+                      className="incident-evidence-button"
+                      onClick={() => onToggleEvidenceChart(finding.id)}
+                      aria-expanded={isChartExpanded}
+                    >
+                      显示异常证据图
+                    </button>
+                  </div>
+                ) : null}
+                {isChartExpanded ? (
+                  <EventEvidenceChart
+                    report={report}
+                    event={event}
+                    modeSegments={modeSegments}
+                    selectionBox={selectionBox}
+                    onChartReady={onChartReady}
+                    onChartDispose={onChartDispose}
+                  />
+                ) : null}
+                {finding.timelineRelation ? (
+                  <small>
+                    阶段：{formatPhase(finding.timelineRelation.phase)}；关系：
+                    {finding.timelineRelation.summary}
+                  </small>
+                ) : null}
+                {finding.propagationRole ? (
+                  <small>传播角色：{formatPropagationRole(finding.propagationRole)}</small>
+                ) : null}
+                {finding.supportingEvidence ||
+                finding.counterEvidence ||
+                finding.missingEvidence ? (
+                  <details>
+                    <summary>证据详情</summary>
+                    <EvidenceAssessmentList
+                      title="支持证据"
+                      finding={finding}
+                      evidenceItems={finding.supportingEvidence ?? []}
+                      report={report}
+                      modeSegments={modeSegments}
+                      selectionBox={selectionBox}
+                      expandedEvidenceEventIds={expandedEvidenceEventIds}
+                      onToggleEvidenceChart={onToggleEvidenceChart}
+                      onChartReady={onChartReady}
+                      onChartDispose={onChartDispose}
+                    />
+                    <EvidenceAssessmentList
+                      title="反证 / 上下文"
+                      finding={finding}
+                      evidenceItems={finding.counterEvidence ?? []}
+                      report={report}
+                      modeSegments={modeSegments}
+                      selectionBox={selectionBox}
+                      expandedEvidenceEventIds={expandedEvidenceEventIds}
+                      onToggleEvidenceChart={onToggleEvidenceChart}
+                      onChartReady={onChartReady}
+                      onChartDispose={onChartDispose}
+                    />
+                    <EvidenceAssessmentList
+                      title="缺失证据"
+                      finding={finding}
+                      evidenceItems={finding.missingEvidence ?? []}
+                      report={report}
+                      modeSegments={modeSegments}
+                      selectionBox={selectionBox}
+                      expandedEvidenceEventIds={expandedEvidenceEventIds}
+                      onToggleEvidenceChart={onToggleEvidenceChart}
+                      onChartReady={onChartReady}
+                      onChartDispose={onChartDispose}
+                    />
+                    {finding.limitations.length > 0 ? (
+                      <ul className="compact-list">
+                        {finding.limitations.map((limitation) => (
+                          <li key={limitation}>{limitation}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </details>
+                ) : null}
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className="hint">当前未检测到严重异常。</p>
+      )}
+    </div>
+  )
+}
+
+function IncidentFlightPhaseSection({
+  report,
+}: {
+  report: IncidentAnalysisResponse
+}) {
+  return (
+    <div className="incident-section">
+      <h4>飞行阶段</h4>
+      {report.phases.length > 0 ? (
+        <div className="incident-phase-list">
+          {report.phases.map((phase) => (
+            <div
+              className="incident-phase-item"
+              key={`${phase.phase}-${phase.startS}-${phase.endS}`}
+            >
+              <strong>{formatPhase(phase.phase)}</strong>
+              <span>
+                {formatSeconds(phase.startS)} - {formatSeconds(phase.endS)}
+              </span>
+              <small>{phase.confidence}</small>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="hint">当前数据不足以可靠识别飞行阶段。</p>
+      )}
+    </div>
+  )
+}
+
+function IncidentEventTimelineSection({
+  report,
+  modeSegments,
+  selectionBox,
+  expandedEvidenceEventIds,
+  expandedRawGroupIds,
+  onToggleEvidenceChart,
+  onToggleRawGroup,
+  onChartReady,
+  onChartDispose,
+}: {
+  report: IncidentAnalysisResponse
+  modeSegments: ModeSegment[]
+  selectionBox?: ChartSelectionPreview | null
+  expandedEvidenceEventIds: string[]
+  expandedRawGroupIds: string[]
+  onToggleEvidenceChart: (eventId: string) => void
+  onToggleRawGroup: (groupId: string) => void
+  onChartReady?: IncidentAnalysisPanelProps['onChartReady']
+  onChartDispose?: IncidentAnalysisPanelProps['onChartDispose']
+}) {
+  return (
+    <div className="incident-section">
+      <h4>飞行事件时间线</h4>
+      {report.eventGroups?.length ? (
+        <ol className="incident-timeline incident-event-group-list">
+          {report.eventGroups.map((group) => {
+            const groupEvent = groupToTimelineEvent(group)
+            const isRawExpanded = expandedRawGroupIds.includes(group.id)
+            const isChartExpanded = expandedEvidenceEventIds.includes(group.id)
+
+            return (
+              <li
+                className={`incident-timeline-item incident-event-group incident-event-${group.severity}${
+                  group.evidenceLinks?.length ? ' incident-timeline-clickable' : ''
+                }`}
+                key={group.id}
+              >
+                <time>{getGroupRangeLabel(group)}</time>
+                <div>
+                  <div className="incident-event-title-row">
+                    <strong>{group.title}</strong>
+                    <span className="incident-group-count">
+                      {group.rawEvents.length} 条事件
+                    </span>
+                  </div>
+                  <p>{group.summary}</p>
+                  <small>
+                    分组：{formatPhase(group.phase)}；证据信号：
+                    {group.evidenceSignals.length > 0
+                      ? group.evidenceSignals.join(', ')
+                      : '暂无'}
+                  </small>
+                  <div className="incident-group-actions">
+                    {group.evidenceLinks?.length ? (
+                      <button
+                        type="button"
+                        className="incident-evidence-button"
+                        onClick={() => onToggleEvidenceChart(group.id)}
+                        aria-expanded={isChartExpanded}
+                      >
+                        显示阶段证据图
+                      </button>
+                    ) : (
+                      <small>暂无可定位图表信号</small>
+                    )}
+                    <button
+                      type="button"
+                      className="incident-evidence-button incident-secondary-button"
+                      onClick={() => onToggleRawGroup(group.id)}
+                      aria-expanded={isRawExpanded}
+                    >
+                      {isRawExpanded ? '收起原始事件' : '展开原始事件'}
+                    </button>
+                  </div>
+                  {isChartExpanded ? (
+                    <EventEvidenceChart
+                      report={report}
+                      event={groupEvent}
+                      modeSegments={modeSegments}
+                      selectionBox={selectionBox}
+                      onChartReady={onChartReady}
+                      onChartDispose={onChartDispose}
+                    />
+                  ) : null}
+                  {isRawExpanded ? (
+                    <ol className="incident-timeline incident-raw-event-list">
+                      {group.rawEvents.map((event) => (
+                        <TimelineEventItem
+                          key={event.id}
+                          event={event}
+                          report={report}
+                          modeSegments={modeSegments}
+                          selectionBox={selectionBox}
+                          onChartReady={onChartReady}
+                          onChartDispose={onChartDispose}
+                          expandedEvidenceEventIds={expandedEvidenceEventIds}
+                          onToggleEvidenceChart={onToggleEvidenceChart}
+                          compact
+                        />
+                      ))}
+                    </ol>
+                  ) : null}
+                </div>
+              </li>
+            )
+          })}
+        </ol>
+      ) : report.timeline.length > 0 ? (
+        <ol className="incident-timeline">
+          {report.timeline.map((event) => (
+            <TimelineEventItem
+              key={event.id}
+              event={event}
+              report={report}
+              modeSegments={modeSegments}
+              selectionBox={selectionBox}
+              onChartReady={onChartReady}
+              onChartDispose={onChartDispose}
+              expandedEvidenceEventIds={expandedEvidenceEventIds}
+              onToggleEvidenceChart={onToggleEvidenceChart}
+            />
+          ))}
+        </ol>
+      ) : (
+        <p className="hint">当前没有可展示的确定性事件。</p>
+      )}
+    </div>
+  )
+}
+
+function IncidentDiagnosticsDetails({
+  report,
+}: {
+  report: IncidentAnalysisResponse
+}) {
+  return (
+    <details className="incident-section incident-advanced-details">
+      <summary>数据限制 / 高级诊断</summary>
+      <div className="incident-diagnostic-block">
+        <strong>当前分析能力</strong>
+        <div className="capability-grid">
+          {capabilityLabels.map(([key, label]) => (
+            <span
+              key={key}
+              className={`capability-pill ${
+                report.analysisCapability[key] ? 'capability-on' : ''
+              }`}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+        {report.analysisCapability.reasons.length > 0 ? (
+          <ul className="compact-list">
+            {report.analysisCapability.reasons.map((reason) => (
+              <li key={reason}>{translateReason(reason)}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+
+      {report.warnings.length > 0 ? (
+        <div className="incident-diagnostic-block">
+          <strong>提示</strong>
+          <ul className="compact-list">
+            {report.warnings.map((warning) => (
+              <li key={warning.code}>
+                <strong>{warning.code}</strong>
+                {'：'}
+                {translateWarningMessage(warning.message)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      <div className="incident-diagnostic-block">
+        <strong>缺失信号</strong>
+        {report.missingSignals.length > 0 ? (
+          <ul className="compact-list">
+            {report.missingSignals.map((signal) => (
+              <li key={signal.id}>
+                <strong>{signal.id}</strong>
+                {signal.required ? '（必需）' : '（可选）'}
+                {'：'}
+                {translateMissingReason(signal.reason)}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="hint">标准信号均已映射。</p>
+        )}
+      </div>
+
+      {report.anomalySummary ? (
+        <div className="incident-diagnostic-block">
+          <strong>检测器运行状态</strong>
+          <ul className="compact-list">
+            {report.anomalySummary.detectorResults.map((detector) => (
+              <li key={detector.id}>
+                <strong>{detector.title}</strong>
+                {'：'}
+                {formatDetectorStatus(detector.status)}
+                {detector.missingSignals.length > 0
+                  ? `；缺失：${detector.missingSignals.join(', ')}`
+                  : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {report.incidentPropagation ? (
+        <div className="incident-diagnostic-block">
+          <strong>证据关系</strong>
+          <p className="hint">
+            仅按时间顺序和飞行阶段组织异常现象，帮助判断先后关系，不推断根因或硬件故障。
+          </p>
+          {report.incidentPropagation.events.length > 0 ? (
+            <ol className="incident-timeline">
+              {report.incidentPropagation.events.map((event) => (
+                <li className="incident-timeline-item" key={event.id}>
+                  <time>{formatSeconds(event.startTimeS)}</time>
+                  <div>
+                    <strong>{event.title}</strong>
+                    <p>{event.summary}</p>
+                    <small>
+                      角色：{formatPropagationRole(event.role)}；阶段：
+                      {formatPhase(event.phase)}
+                    </small>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="hint">当前没有可组成传播链的异常现象。</p>
+          )}
+        </div>
+      ) : null}
+
+      <div className="incident-diagnostic-block">
+        <strong>标准信号映射</strong>
+        <p className="hint">
+          契约版本：{report.contractVersion}
+          {report.anomalySummary?.version
+            ? `；异常检测版本：${report.anomalySummary.version}`
+            : ''}
+          {report.incidentPropagation?.version
+            ? `；证据关系版本：${report.incidentPropagation.version}`
+            : ''}
+        </p>
+        <div className="incident-mapping-table">
+          <div className="incident-mapping-row incident-mapping-header">
+            <span>标准信号</span>
+            <span>状态</span>
+            <span>来源</span>
+            <span>样本</span>
+          </div>
+          {report.signalMappingReport.map((item) => (
+            <div className="incident-mapping-row" key={item.standardSignal}>
+              <span>{item.standardSignal}</span>
+              <span>{formatMappingStatus(item.status)}</span>
+              <span>
+                {item.source
+                  ? `${item.source.topic}[${item.source.instance}].${item.source.field}`
+                  : '无'}
+              </span>
+              <span>{item.sampleCount}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </details>
+  )
+}
+
 function IncidentAnalysisPanel({
   selectedLogId,
   report,
@@ -751,7 +1256,7 @@ function IncidentAnalysisPanel({
         <div>
           <h3>功能 1：常规日志分析</h3>
           <p className="hint">
-            默认展示日志概览、飞行事件时间线和证据图表；不判断根因、硬件故障或事故概率。
+            默认展示关键摘要、飞行阶段和事件时间线；证据图在事件内按需展开，不判断根因、硬件故障或事故概率。
           </p>
         </div>
         <button
@@ -768,423 +1273,29 @@ function IncidentAnalysisPanel({
 
       {report ? (
         <div className="incident-result">
-          <div className="incident-section incident-overview-section">
-            <h4>日志概览</h4>
-            <div className="incident-summary-grid">
-              <div>
-                <span>数据质量</span>
-                <strong className={`quality-level quality-${report.dataQuality.level}`}>
-                  {formatQualityLevel(report.dataQuality.level)}
-                </strong>
-              </div>
-              <div>
-                <span>日志时长</span>
-                <strong>{formatSeconds(report.flightSummary.durationS)}</strong>
-              </div>
-              <div>
-                <span>解锁飞行时长</span>
-                <strong>{formatSeconds(report.flightSummary.armedFlightTimeS)}</strong>
-              </div>
-              <div>
-                <span>解锁次数</span>
-                <strong>{report.flightSummary.unlockCount ?? '不可用'}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div className="incident-section">
-            <h4>当前分析能力</h4>
-            <div className="capability-grid">
-              {capabilityLabels.map(([key, label]) => (
-                <span
-                  key={key}
-                  className={`capability-pill ${
-                    report.analysisCapability[key] ? 'capability-on' : ''
-                  }`}
-                >
-                  {label}
-                </span>
-              ))}
-            </div>
-            {report.analysisCapability.reasons.length > 0 ? (
-              <ul className="compact-list">
-                {report.analysisCapability.reasons.map((reason) => (
-                  <li key={reason}>{translateReason(reason)}</li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-
-          <div className="incident-section">
-            <h4>飞行阶段</h4>
-            {report.phases.length > 0 ? (
-              <div className="incident-phase-list">
-                {report.phases.map((phase) => (
-                  <div
-                    className="incident-phase-item"
-                    key={`${phase.phase}-${phase.startS}-${phase.endS}`}
-                  >
-                    <strong>{formatPhase(phase.phase)}</strong>
-                    <span>
-                      {formatSeconds(phase.startS)} - {formatSeconds(phase.endS)}
-                    </span>
-                    <small>{phase.confidence}</small>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="hint">当前数据不足以可靠识别飞行阶段。</p>
-            )}
-          </div>
-
-          {report.anomalySummary ? (
-            <div className="incident-section">
-              <h4>异常提示</h4>
-              <p className="hint">
-                仅汇总日志明确记录的异常旗标和保守检测结果，不输出根因、硬件故障或事故概率。
-              </p>
-              <div className="incident-summary-grid">
-                <div>
-                  <span>检测状态</span>
-                  <strong>{formatAnomalyStatus(report.anomalySummary.status)}</strong>
-                </div>
-                <div>
-                  <span>最高等级</span>
-                  <strong>{formatAnomalySeverity(report.anomalySummary.severity)}</strong>
-                </div>
-                <div>
-                  <span>最早异常</span>
-                  <strong>{formatSeconds(report.anomalySummary.earliestAnomalyTimeS)}</strong>
-                </div>
-              </div>
-
-              {report.anomalySummary.findings.length > 0 ? (
-                <ul className="compact-list">
-                  {report.anomalySummary.findings.map((finding) => {
-                    const event = anomalyFindingToTimelineEvent(finding)
-                    const isChartExpanded = expandedEvidenceEventIds.includes(finding.id)
-
-                    return (
-                      <li key={finding.id}>
-                        <strong>{finding.title}</strong>
-                        {'：'}
-                        {finding.summary}
-                        {'；时间：'}
-                        {formatSeconds(finding.startTimeS)}
-                        {' - '}
-                        {formatSeconds(finding.endTimeS)}
-                        {'；证据信号：'}
-                        {finding.evidenceSignals.join(', ')}
-                        {finding.missingSignals.length > 0
-                          ? `；缺失：${finding.missingSignals.join(', ')}`
-                          : ''}
-                        {(finding.evidenceLinks?.length ?? 0) > 0 ? (
-                          <div className="incident-group-actions">
-                            <button
-                              type="button"
-                              className="incident-evidence-button"
-                              onClick={() => toggleEvidenceChart(finding.id)}
-                              aria-expanded={isChartExpanded}
-                            >
-                              显示异常证据图
-                            </button>
-                          </div>
-                        ) : null}
-                        {isChartExpanded ? (
-                          <EventEvidenceChart
-                            report={report}
-                            event={event}
-                            modeSegments={modeSegments}
-                            selectionBox={selectionBox}
-                            onChartReady={onChartReady}
-                            onChartDispose={onChartDispose}
-                          />
-                        ) : null}
-                        {finding.timelineRelation ? (
-                          <small>
-                            阶段：{formatPhase(finding.timelineRelation.phase)}；关系：
-                            {finding.timelineRelation.summary}
-                          </small>
-                        ) : null}
-                        {finding.propagationRole ? (
-                          <small>传播角色：{formatPropagationRole(finding.propagationRole)}</small>
-                        ) : null}
-                        {finding.supportingEvidence ||
-                        finding.counterEvidence ||
-                        finding.missingEvidence ? (
-                          <details>
-                            <summary>证据详情</summary>
-                            <EvidenceAssessmentList
-                              title="支持证据"
-                              finding={finding}
-                              evidenceItems={finding.supportingEvidence ?? []}
-                              report={report}
-                              modeSegments={modeSegments}
-                              selectionBox={selectionBox}
-                              expandedEvidenceEventIds={expandedEvidenceEventIds}
-                              onToggleEvidenceChart={toggleEvidenceChart}
-                              onChartReady={onChartReady}
-                              onChartDispose={onChartDispose}
-                            />
-                            <EvidenceAssessmentList
-                              title="反证 / 上下文"
-                              finding={finding}
-                              evidenceItems={finding.counterEvidence ?? []}
-                              report={report}
-                              modeSegments={modeSegments}
-                              selectionBox={selectionBox}
-                              expandedEvidenceEventIds={expandedEvidenceEventIds}
-                              onToggleEvidenceChart={toggleEvidenceChart}
-                              onChartReady={onChartReady}
-                              onChartDispose={onChartDispose}
-                            />
-                            <EvidenceAssessmentList
-                              title="缺失证据"
-                              finding={finding}
-                              evidenceItems={finding.missingEvidence ?? []}
-                              report={report}
-                              modeSegments={modeSegments}
-                              selectionBox={selectionBox}
-                              expandedEvidenceEventIds={expandedEvidenceEventIds}
-                              onToggleEvidenceChart={toggleEvidenceChart}
-                              onChartReady={onChartReady}
-                              onChartDispose={onChartDispose}
-                            />
-                            {finding.limitations.length > 0 ? (
-                              <ul className="compact-list">
-                                {finding.limitations.map((limitation) => (
-                                  <li key={limitation}>{limitation}</li>
-                                ))}
-                              </ul>
-                            ) : null}
-                          </details>
-                        ) : null}
-                      </li>
-                    )
-                  })}
-                </ul>
-              ) : (
-                <p className="hint">当前未检测到严重异常。</p>
-              )}
-
-              <details>
-                <summary>检测器运行状态</summary>
-                <ul className="compact-list">
-                  {report.anomalySummary.detectorResults.map((detector) => (
-                    <li key={detector.id}>
-                      <strong>{detector.title}</strong>
-                      {'：'}
-                      {formatDetectorStatus(detector.status)}
-                      {detector.missingSignals.length > 0
-                        ? `；缺失：${detector.missingSignals.join(', ')}`
-                        : ''}
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            </div>
-          ) : null}
-
-          {report.incidentPropagation ? (
-            <div className="incident-section">
-              <h4>证据关系</h4>
-              <p className="hint">
-                仅按时间顺序和飞行阶段组织异常现象，帮助判断先后关系，不推断根因或硬件故障。
-              </p>
-              {report.incidentPropagation.events.length > 0 ? (
-                <ol className="incident-timeline">
-                  {report.incidentPropagation.events.map((event) => (
-                    <li className="incident-timeline-item" key={event.id}>
-                      <time>{formatSeconds(event.startTimeS)}</time>
-                      <div>
-                        <strong>{event.title}</strong>
-                        <p>{event.summary}</p>
-                        <small>
-                          角色：{formatPropagationRole(event.role)}；阶段：
-                          {formatPhase(event.phase)}
-                        </small>
-                      </div>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="hint">当前没有可组成传播链的异常现象。</p>
-              )}
-            </div>
-          ) : null}
-
-          <div className="incident-section">
-            <h4>飞行事件时间线</h4>
-            {report.eventGroups?.length ? (
-              <ol className="incident-timeline incident-event-group-list">
-                {report.eventGroups.map((group) => {
-                  const groupEvent = groupToTimelineEvent(group)
-                  const isRawExpanded = expandedRawGroupIds.includes(group.id)
-                  const isChartExpanded = expandedEvidenceEventIds.includes(group.id)
-
-                  return (
-                    <li
-                      className={`incident-timeline-item incident-event-group incident-event-${group.severity}${
-                        group.evidenceLinks?.length ? ' incident-timeline-clickable' : ''
-                      }`}
-                      key={group.id}
-                    >
-                      <time>{getGroupRangeLabel(group)}</time>
-                      <div>
-                        <div className="incident-event-title-row">
-                          <strong>{group.title}</strong>
-                          <span className="incident-group-count">
-                            {group.rawEvents.length} 条事件
-                          </span>
-                        </div>
-                        <p>{group.summary}</p>
-                        <small>
-                          分组：{formatPhase(group.phase)}；证据信号：
-                          {group.evidenceSignals.length > 0
-                            ? group.evidenceSignals.join(', ')
-                            : '暂无'}
-                        </small>
-                        <div className="incident-group-actions">
-                          {group.evidenceLinks?.length ? (
-                            <button
-                              type="button"
-                              className="incident-evidence-button"
-                              onClick={() => toggleEvidenceChart(group.id)}
-                              aria-expanded={isChartExpanded}
-                            >
-                              显示阶段证据图
-                            </button>
-                          ) : (
-                            <small>暂无可定位图表信号</small>
-                          )}
-                          <button
-                            type="button"
-                            className="incident-evidence-button incident-secondary-button"
-                            onClick={() => toggleRawGroup(group.id)}
-                            aria-expanded={isRawExpanded}
-                          >
-                            {isRawExpanded ? '收起原始事件' : '展开原始事件'}
-                          </button>
-                        </div>
-                        {isChartExpanded ? (
-                          <EventEvidenceChart
-                            report={report}
-                            event={groupEvent}
-                            modeSegments={modeSegments}
-                            selectionBox={selectionBox}
-                            onChartReady={onChartReady}
-                            onChartDispose={onChartDispose}
-                          />
-                        ) : null}
-                        {isRawExpanded ? (
-                          <ol className="incident-timeline incident-raw-event-list">
-                            {group.rawEvents.map((event) => (
-                              <TimelineEventItem
-                                key={event.id}
-                                event={event}
-                                report={report}
-                                modeSegments={modeSegments}
-                                selectionBox={selectionBox}
-                                onChartReady={onChartReady}
-                                onChartDispose={onChartDispose}
-                                expandedEvidenceEventIds={expandedEvidenceEventIds}
-                                onToggleEvidenceChart={toggleEvidenceChart}
-                                compact
-                              />
-                            ))}
-                          </ol>
-                        ) : null}
-                      </div>
-                    </li>
-                  )
-                })}
-              </ol>
-            ) : report.timeline.length > 0 ? (
-              <ol className="incident-timeline">
-                {report.timeline.map((event) => (
-                  <TimelineEventItem
-                    key={event.id}
-                    event={event}
-                    report={report}
-                    modeSegments={modeSegments}
-                    selectionBox={selectionBox}
-                    onChartReady={onChartReady}
-                    onChartDispose={onChartDispose}
-                    expandedEvidenceEventIds={expandedEvidenceEventIds}
-                    onToggleEvidenceChart={toggleEvidenceChart}
-                  />
-                ))}
-              </ol>
-            ) : (
-              <p className="hint">当前没有可展示的确定性事件。</p>
-            )}
-          </div>
-
-          {report.warnings.length > 0 ? (
-            <div className="incident-section">
-              <h4>提示</h4>
-              <ul className="compact-list">
-                {report.warnings.map((warning) => (
-                  <li key={warning.code}>
-                    <strong>{warning.code}</strong>
-                    {'：'}
-                    {translateWarningMessage(warning.message)}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          <div className="incident-section">
-            <h4>缺失信号</h4>
-            {report.missingSignals.length > 0 ? (
-              <ul className="compact-list">
-                {report.missingSignals.map((signal) => (
-                  <li key={signal.id}>
-                    <strong>{signal.id}</strong>
-                    {signal.required ? '（必需）' : '（可选）'}
-                    {'：'}
-                    {translateMissingReason(signal.reason)}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="hint">标准信号均已映射。</p>
-            )}
-          </div>
-
-          <details className="incident-section incident-advanced-details">
-            <summary>高级诊断细节：标准信号映射</summary>
-            <p className="hint">
-              契约版本：{report.contractVersion}
-              {report.anomalySummary?.version
-                ? `；异常检测版本：${report.anomalySummary.version}`
-                : ''}
-              {report.incidentPropagation?.version
-                ? `；证据关系版本：${report.incidentPropagation.version}`
-                : ''}
-            </p>
-            <div className="incident-mapping-table">
-              <div className="incident-mapping-row incident-mapping-header">
-                <span>标准信号</span>
-                <span>状态</span>
-                <span>来源</span>
-                <span>样本</span>
-              </div>
-              {report.signalMappingReport.map((item) => (
-                <div className="incident-mapping-row" key={item.standardSignal}>
-                  <span>{item.standardSignal}</span>
-                  <span>{formatMappingStatus(item.status)}</span>
-                  <span>
-                    {item.source
-                      ? `${item.source.topic}[${item.source.instance}].${item.source.field}`
-                      : '无'}
-                  </span>
-                  <span>{item.sampleCount}</span>
-                </div>
-              ))}
-            </div>
-          </details>
+          <IncidentOverviewSummary report={report} />
+          <IncidentAnomalySummarySection
+            report={report}
+            modeSegments={modeSegments}
+            selectionBox={selectionBox}
+            expandedEvidenceEventIds={expandedEvidenceEventIds}
+            onToggleEvidenceChart={toggleEvidenceChart}
+            onChartReady={onChartReady}
+            onChartDispose={onChartDispose}
+          />
+          <IncidentFlightPhaseSection report={report} />
+          <IncidentEventTimelineSection
+            report={report}
+            modeSegments={modeSegments}
+            selectionBox={selectionBox}
+            expandedEvidenceEventIds={expandedEvidenceEventIds}
+            expandedRawGroupIds={expandedRawGroupIds}
+            onToggleEvidenceChart={toggleEvidenceChart}
+            onToggleRawGroup={toggleRawGroup}
+            onChartReady={onChartReady}
+            onChartDispose={onChartDispose}
+          />
+          <IncidentDiagnosticsDetails report={report} />
         </div>
       ) : null}
     </section>

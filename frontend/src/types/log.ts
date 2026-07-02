@@ -201,17 +201,22 @@ export type ControlQualityParameterTuningItem = {
   status: ControlQualityParameterTuningStatus
   targetValue: number | null
   changePercent: number | null
+  phenomenon?: string
+  confidence?: 'low' | 'medium' | 'high' | string
+  evidence?: string[]
   reason: string
 }
 
 export type ControlQualityLoopParameterTuning = {
   status: string
   parameters: ControlQualityParameterTuningItem[]
+  blockers?: string[]
   notes: string[]
 }
 
 export type ControlQualityParameterTuning = {
   actuatorBlocksIncrease: boolean
+  actuatorSaturationLevel?: 'none' | 'high' | 'severe' | string
   loops: Record<string, ControlQualityLoopParameterTuning | undefined>
   warnings: string[]
 }

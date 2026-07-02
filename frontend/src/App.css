@@ -159,10 +159,6 @@
   margin: 0;
 }
 
-.evidence-chart-section {
-  margin-top: 18px;
-}
-
 .advanced-raw-data-panel {
   margin-top: 16px;
   border-top: 1px solid #e2e8f0;
@@ -228,6 +224,39 @@
   color: #1f2937;
   font-size: 15px;
   overflow-wrap: anywhere;
+}
+
+.incident-key-summary-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.incident-anomaly-summary-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.incident-anomaly-list {
+  display: grid;
+  gap: 8px;
+}
+
+.incident-anomaly-list small {
+  display: block;
+  margin-top: 4px;
+  color: #64748b;
+}
+
+.incident-diagnostic-block {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.incident-diagnostic-block + .incident-diagnostic-block {
+  border-top: 1px solid #e2e8f0;
+}
+
+.incident-diagnostic-block > strong {
+  color: #1f2937;
 }
 
 .quality-level {

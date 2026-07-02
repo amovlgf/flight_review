@@ -80,6 +80,12 @@ type LogNotFoundResponse = {
 
 当前错误响应只保证包含 `message` 与空 `series`，不保证包含 `topicCharts`、`diagnostics`、`modeSegments` 等字段。
 
+When `dataSource` is `header-derived-simulated-series`, the fallback series is
+deterministic for the same uploaded file name and ULog header metadata
+(`fileSizeBytes`, `version`, and `logStartTimestampUs`). Re-uploading the same
+file should therefore return the same fallback chart values even though the
+new upload receives a different `logId`.
+
 ## LogMetadata
 
 ```ts
@@ -252,7 +258,7 @@ type ControlQualityRequest = {
   segment?: {
     startS: number | null;
     endS: number | null;
-    source?: 'manual' | 'auto' | string;
+    source?: 'manual' | 'auto' | 'chart_selection' | string;
   };
   parameterBounds?: Record<
     string,
@@ -268,6 +274,12 @@ type ControlQualityRequest = {
 
 When `segment` is omitted, the backend uses the available topic time range and
 excludes the first and last 5 percent as a conservative default analysis range.
+Frontend chart zoom is only a visual range. It must not change
+`analysis_time_range` or trigger recalculation by itself. A recalculation is
+requested only by submitting the range form or by applying a chart selection;
+chart-selection requests set `segment.source` to `chart_selection`, while range
+form requests use `manual` for finite start/end values and `auto` when either
+bound is cleared.
 
 ### JSON Response
 
@@ -314,10 +326,12 @@ generated target value different from the current value are returned.
 ```ts
 type ControlQualityParameterTuning = {
   actuatorBlocksIncrease: boolean;
+  actuatorSaturationLevel?: 'none' | 'high' | 'severe' | string;
   loops: Record<
     'actuator' | 'rate' | 'attitude' | 'velocity' | 'position' | string,
     {
       status: string;
+      blockers?: string[];
       parameters: Array<{
         loop: string;
         axis: string;
@@ -337,6 +351,9 @@ type ControlQualityParameterTuning = {
         } | null;
         targetValue: number | null;
         changePercent: number | null;
+        phenomenon?: string;
+        confidence?: 'low' | 'medium' | 'high' | string;
+        evidence?: string[];
         status:
           | 'target_generated'
           | 'bounds_required'
@@ -359,6 +376,17 @@ Items with `targetable: false`, unchanged targets, missing current values,
 invalid bounds, and blocked gain increases are omitted from the default
 recommendation list. `description` is intended for frontend tooltips beside
 the parameter name.
+
+The recommendation engine is conservative and ordered inner-to-outer. A rate
+loop issue blocks attitude, velocity, and position recommendations; an attitude
+issue blocks velocity and position recommendations; a velocity issue blocks
+position recommendations. `blockers` explains why a loop has no recommendation,
+for example insufficient excitation, parameter changes inside the selected
+analysis window, estimator/feedback anomalies, upstream loop instability, or
+severe actuator saturation. `phenomenon`, `confidence`, and `evidence` describe
+the metric reason behind generated targets. The backend keeps single-step
+changes small: default maximum `±5%`, weak evidence `±2.5%`, and no ordinary
+target generation for severe oscillation or severe actuator saturation.
 
 For the `actuator` loop, `ControlQualityLoop` also returns `chart`, a list of
 executor output channels for the full available curve. Metric fields and

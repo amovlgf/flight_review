@@ -15,6 +15,119 @@ function buildSeries(name, points) {
   };
 }
 
+function buildStepPoints() {
+  return [
+    [0, 0],
+    [1, 0],
+    [2, 0],
+    [3, 0],
+    [4, 0],
+    [5, 10],
+    [6, 10],
+    [7, 10],
+    [8, 10],
+    [9, 10],
+    [10, 10],
+  ];
+}
+
+function buildNormalControlTopics() {
+  const points = buildStepPoints();
+  const neutralActuator = points.map(([time]) => [time, 0.5]);
+
+  return [
+    {
+      topic: 'actuator_motors',
+      title: 'actuator_motors',
+      series: [buildSeries('control[0]', neutralActuator)],
+    },
+    {
+      topic: 'vehicle_rates_setpoint',
+      title: 'vehicle_rates_setpoint',
+      series: [
+        buildSeries('roll', points),
+        buildSeries('pitch', points),
+        buildSeries('yaw', points),
+      ],
+    },
+    {
+      topic: 'vehicle_angular_velocity',
+      title: 'vehicle_angular_velocity',
+      series: [
+        buildSeries('xyz[0]', points),
+        buildSeries('xyz[1]', points),
+        buildSeries('xyz[2]', points),
+      ],
+    },
+    {
+      topic: 'vehicle_attitude_setpoint',
+      title: 'vehicle_attitude_setpoint',
+      series: [
+        buildSeries('roll_sp', points),
+        buildSeries('pitch_sp', points),
+        buildSeries('yaw_sp', points),
+      ],
+    },
+    {
+      topic: 'vehicle_attitude',
+      title: 'vehicle_attitude',
+      series: [
+        buildSeries('roll', points),
+        buildSeries('pitch', points),
+        buildSeries('yaw', points),
+      ],
+    },
+    {
+      topic: 'vehicle_local_position_setpoint',
+      title: 'vehicle_local_position_setpoint',
+      series: [
+        buildSeries('vx', points),
+        buildSeries('vy', points),
+        buildSeries('vz', points),
+        buildSeries('x', points),
+        buildSeries('y', points),
+        buildSeries('z', points),
+      ],
+    },
+    {
+      topic: 'vehicle_local_position',
+      title: 'vehicle_local_position',
+      series: [
+        buildSeries('vx', points),
+        buildSeries('vy', points),
+        buildSeries('vz', points),
+        buildSeries('x', points),
+        buildSeries('y', points),
+        buildSeries('z', points),
+      ],
+    },
+  ];
+}
+
+function buildControlParameterProfile(overrides = {}) {
+  return {
+    initialParameters: {
+      MC_ROLLRATE_P: 0.15,
+      MC_ROLLRATE_I: 0.2,
+      MC_ROLLRATE_D: 0.003,
+      MC_YAWRATE_D: 0.003,
+      MC_ROLL_P: 6,
+      MPC_XY_VEL_P_ACC: 2,
+      MPC_XY_P: 1,
+      ...overrides.initialParameters,
+    },
+    changedParameters: overrides.changedParameters || [],
+  };
+}
+
+function getTuningLoop(report, loopName) {
+  return report.parameterTuning.loops[loopName];
+}
+
+function blockerText(tuningLoop) {
+  return (tuningLoop.blockers || []).join(' ');
+}
+
 test('wrapAngleDeg keeps yaw error across the +/-180 boundary small', () => {
   assert.equal(wrapAngleDeg(358), -2);
   assert.equal(wrapAngleDeg(-358), 2);
@@ -342,8 +455,8 @@ test('control quality report generates default-bounded recommendations and omits
   assert.equal(rollP.currentValue, 0.15);
   assert.equal(rollP.currentSource, 'initial');
   assert.equal(rollP.status, 'target_generated');
-  assert.equal(rollP.targetValue, 0.1425);
-  assert.equal(rollP.changePercent, -5);
+  assert.equal(rollP.targetValue, 0.14625);
+  assert.equal(rollP.changePercent, -2.5);
   assert.match(rollP.description, /横滚角速度比例增益/);
 
   const rollFf = report.parameterTuning.loops.rate.parameters.find(
@@ -353,7 +466,7 @@ test('control quality report generates default-bounded recommendations and omits
   assert.equal(rollFf, undefined);
 });
 
-test('control quality report uses latest parameter change before analysis end', () => {
+test('control quality report uses latest stable parameter change before analysis start', () => {
   const points = [
     [0, 0],
     [1, 0],
@@ -382,7 +495,7 @@ test('control quality report uses latest parameter change before analysis end', 
         MC_ROLLRATE_P: 0.15,
       },
       changedParameters: [
-        { name: 'MC_ROLLRATE_P', value: 0.16, timeS: 2 },
+        { name: 'MC_ROLLRATE_P', value: 0.16, timeS: -1 },
         { name: 'MC_ROLLRATE_P', value: 0.18, timeS: 12 },
       ],
     },
@@ -412,8 +525,8 @@ test('control quality report uses latest parameter change before analysis end', 
 
   assert.equal(rollP.currentValue, 0.16);
   assert.equal(rollP.currentSource, 'changed');
-  assert.equal(rollP.currentTimeS, 2);
-  assert.equal(rollP.targetValue, 0.152);
+  assert.equal(rollP.currentTimeS, -1);
+  assert.equal(rollP.targetValue, 0.156);
 });
 
 test('control quality report omits display-only attitude context parameters', () => {
@@ -510,8 +623,8 @@ test('control quality report generates bounded target values from metrics', () =
   );
 
   assert.equal(rollP.status, 'target_generated');
-  assert.equal(rollP.targetValue, 0.1425);
-  assert.equal(rollP.changePercent, -5);
+  assert.equal(rollP.targetValue, 0.14625);
+  assert.equal(rollP.changePercent, -2.5);
 });
 
 test('control quality target generation blocks increases when actuator is saturated', () => {
@@ -646,4 +759,314 @@ test('control quality report keeps shared xy parameters unique and validates bou
 
   assert.equal(xyParameters.length, 0);
   assert.equal(report.parameterTuning.loops.position.status, 'no_recommendation');
+});
+
+test('rate abnormalities block attitude, velocity, and position recommendations', () => {
+  const topics = buildNormalControlTopics();
+  const stepPoints = buildStepPoints();
+  const rateFeedback = stepPoints.map(([time, value]) => [
+    time,
+    time >= 5 ? value + 2 : value,
+  ]);
+  topics.find((topic) => topic.topic === 'vehicle_angular_velocity').series[0] =
+    buildSeries('xyz[0]', rateFeedback);
+
+  const report = buildControlQualityReport({
+    fileName: 'inner-loop-first.ulg',
+    usedTopics: topics.map((topic) => topic.topic),
+    parameterProfile: buildControlParameterProfile(),
+    topicCharts: topics,
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+  });
+
+  assert.match(blockerText(getTuningLoop(report, 'attitude')), /rate/i);
+  assert.match(blockerText(getTuningLoop(report, 'velocity')), /rate/i);
+  assert.match(blockerText(getTuningLoop(report, 'position')), /rate/i);
+  assert.deepEqual(getTuningLoop(report, 'attitude').parameters, []);
+  assert.deepEqual(getTuningLoop(report, 'velocity').parameters, []);
+  assert.deepEqual(getTuningLoop(report, 'position').parameters, []);
+});
+
+test('parameter changes inside the analysis window block recommendations', () => {
+  const points = buildStepPoints();
+  const feedback = points.map(([time, value]) => [
+    time,
+    time >= 5 ? value + 2 : value,
+  ]);
+
+  const report = buildControlQualityReport({
+    fileName: 'changed-in-window.ulg',
+    usedTopics: [
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: buildControlParameterProfile({
+      changedParameters: [
+        { name: 'MC_ROLLRATE_P', value: 0.16, timeS: 2 },
+      ],
+    }),
+    topicCharts: [
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', points)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', feedback)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+  });
+
+  assert.equal(
+    getTuningLoop(report, 'rate').parameters.some(
+      (item) => item.parameter === 'MC_ROLLRATE_P',
+    ),
+    false,
+  );
+  assert.match(blockerText(getTuningLoop(report, 'rate')), /changed.*window/i);
+});
+
+test('severe actuator saturation suppresses ordinary PID target generation', () => {
+  const points = buildStepPoints();
+  const slowFeedback = points.map(([time, value], index) => [
+    time,
+    index === 0 ? value : points[index - 1][1],
+  ]);
+
+  const report = buildControlQualityReport({
+    fileName: 'severe-saturation.ulg',
+    usedTopics: [
+      'actuator_motors',
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: buildControlParameterProfile(),
+    topicCharts: [
+      {
+        topic: 'actuator_motors',
+        title: 'actuator_motors',
+        series: [buildSeries('control[0]', points.map(([time]) => [time, 1]))],
+      },
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', points)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', slowFeedback)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+  });
+
+  assert.equal(report.parameterTuning.actuatorSaturationLevel, 'severe');
+  assert.deepEqual(getTuningLoop(report, 'rate').parameters, []);
+  assert.match(blockerText(getTuningLoop(report, 'rate')), /severe actuator saturation/i);
+});
+
+test('rate overshoot prefers a small D increase only when D is usable', () => {
+  const points = buildStepPoints();
+  const feedback = points.map(([time, value]) => [
+    time,
+    time >= 5 ? value + 2 : value,
+  ]);
+
+  const report = buildControlQualityReport({
+    fileName: 'rate-overshoot.ulg',
+    usedTopics: [
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: buildControlParameterProfile(),
+    topicCharts: [
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', points)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', feedback)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+  });
+
+  const rollP = getTuningLoop(report, 'rate').parameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_P',
+  );
+  const rollD = getTuningLoop(report, 'rate').parameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_D',
+  );
+
+  assert.equal(rollP, undefined);
+  assert.equal(rollD.status, 'target_generated');
+  assert.equal(rollD.phenomenon, 'overshoot');
+  assert.equal(rollD.confidence, 'medium');
+  assert.equal(rollD.changePercent, 2.5);
+});
+
+test('yaw rate overshoot does not automatically increase D', () => {
+  const points = buildStepPoints();
+  const feedback = points.map(([time, value]) => [
+    time,
+    time >= 5 ? value + 2 : value,
+  ]);
+
+  const report = buildControlQualityReport({
+    fileName: 'yaw-overshoot.ulg',
+    usedTopics: [
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: buildControlParameterProfile(),
+    topicCharts: [
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('yaw', points)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[2]', feedback)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+  });
+
+  assert.equal(
+    getTuningLoop(report, 'rate').parameters.some(
+      (item) =>
+        item.parameter === 'MC_YAWRATE_D' &&
+        item.changePercent > 0,
+    ),
+    false,
+  );
+  assert.match(blockerText(getTuningLoop(report, 'rate')), /yaw.*D/i);
+});
+
+test('estimator anomalies block PID recommendations', () => {
+  const points = buildStepPoints();
+  const feedback = points.map(([time, value]) => [
+    time,
+    time >= 5 ? value + 2 : value,
+  ]);
+  const positionWithJump = points.map(([time, value]) => [
+    time,
+    time === 6 ? value + 5 : value,
+  ]);
+
+  const report = buildControlQualityReport({
+    fileName: 'estimator-jump.ulg',
+    usedTopics: [
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+      'vehicle_local_position',
+      'vehicle_local_position_setpoint',
+    ],
+    parameterProfile: buildControlParameterProfile(),
+    topicCharts: [
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', points)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', feedback)],
+      },
+      {
+        topic: 'vehicle_local_position',
+        title: 'vehicle_local_position',
+        series: [
+          buildSeries('x', positionWithJump),
+          buildSeries('vx', positionWithJump),
+        ],
+      },
+      {
+        topic: 'vehicle_local_position_setpoint',
+        title: 'vehicle_local_position_setpoint',
+        series: [
+          buildSeries('x', points),
+          buildSeries('vx', points),
+        ],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+  });
+
+  assert.deepEqual(getTuningLoop(report, 'rate').parameters, []);
+  assert.match(blockerText(getTuningLoop(report, 'rate')), /estimator|feedback/i);
+});
+
+test('insufficient excitation reports blockers instead of parameter targets', () => {
+  const points = buildStepPoints().map(([time]) => [time, 1]);
+
+  const report = buildControlQualityReport({
+    fileName: 'low-excitation.ulg',
+    usedTopics: [
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: buildControlParameterProfile(),
+    topicCharts: [
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', points)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', points)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+  });
+
+  assert.deepEqual(getTuningLoop(report, 'rate').parameters, []);
+  assert.match(blockerText(getTuningLoop(report, 'rate')), /excitation/i);
 });

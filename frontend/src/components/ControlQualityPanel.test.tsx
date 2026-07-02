@@ -118,4 +118,27 @@ describe('ControlQualityPanel parameter recommendations', () => {
 
     expect(html).toContain('当前区间未发现需要调整的 PID 参数。')
   })
+  it('renders blocker reasons when recommendations are suppressed', () => {
+    const report = buildReport([])
+    const rateTuning = report.parameterTuning?.loops.rate
+    if (rateTuning) {
+      rateTuning.blockers = [
+        'Rate loop is not healthy enough for downstream tuning.',
+      ]
+    }
+
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={report}
+        isLoading={false}
+        errorText=""
+        onApplyRange={() => {}}
+      />,
+    )
+
+    expect(html).toContain(
+      'Rate loop is not healthy enough for downstream tuning.',
+    )
+  })
 })
