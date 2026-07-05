@@ -19,6 +19,9 @@ const SEVERE_OSCILLATION_COUNT = 16;
 const HIGH_OVERSHOOT_RATIO = 0.3;
 const HIGH_TRACKING_ERROR_NRMSE = 0.25;
 const HIGH_DELAY_S = 0.15;
+const ACTUATOR_HIGH_FREQUENCY_DIFF_STD = 0.08;
+const SENSOR_MILD_DIFF_STD = 0.35;
+const SENSOR_SEVERE_DIFF_STD = 3.0;
 
 const REQUIRED_TOPICS = [
   'vehicle_angular_velocity',
@@ -86,6 +89,12 @@ const LOOP_TOPIC_MAP = {
     fb: ['vehicle_local_position'],
     maxDelayS: 2.0,
   },
+};
+
+const UPSTREAM_LOOP_REQUIREMENTS = {
+  attitude: ['rate'],
+  velocity: ['rate', 'attitude'],
+  position: ['rate', 'attitude', 'velocity'],
 };
 
 const PARAMETER_TUNING_MAP = {
@@ -512,6 +521,35 @@ function buildMetricEvidence(metricSummary) {
   return evidence;
 }
 
+function getTargetBlockerMetadata(reason) {
+  const value = String(reason || '');
+  if (/mechanical or IMU noise/i.test(value)) {
+    return {
+      phenomenon: 'mechanical_imu_noise',
+      nextAction:
+        'Diagnostic first: inspect propellers, motors, frame stiffness, flight-controller mount, vibration isolation, sensors, and filter settings.',
+    };
+  }
+  if (/severe vibration|severe oscillation/i.test(value)) {
+    return {
+      phenomenon: 'severe_vibration',
+      nextAction:
+        'Diagnostic first: inspect mechanical vibration, sensors, estimator health, and filter settings before changing PID gains.',
+    };
+  }
+  if (/estimator or feedback signal anomalies/i.test(value)) {
+    return {
+      phenomenon: 'estimator_anomaly',
+      nextAction:
+        'Resolve estimator or feedback signal anomalies before generating PID targets.',
+    };
+  }
+  return {
+    phenomenon: 'blocked',
+    nextAction: getDeferredNextAction(reason),
+  };
+}
+
 function getMetricGateBlockers(loopName, axisLabel, metricSummary) {
   const prefix = `${loopName} ${axisLabel}`;
   if (metricSummary.status !== 'available') {
@@ -620,15 +658,73 @@ function chooseParameterStep({
 }) {
   const evidence = buildMetricEvidence(metricSummary);
   const primaryPhenomenon = getPrimaryPhenomenon(metricSummary);
+  const tuningSafety = groupContext?.tuningSafety || {};
+
+  if (
+    tuningSafety.pidRecommendationPolicy === 'blocked' ||
+    tuningSafety.pidRecommendationPolicy === 'diagnostic_only'
+  ) {
+    const mechanical = tuningSafety.vibrationCategory === 'mechanical_imu_noise';
+    const estimator = tuningSafety.vibrationCategory === 'estimator_anomaly';
+    return {
+      status: 'blocked',
+      percent: 0,
+      phenomenon: estimator
+        ? 'estimator_anomaly'
+        : mechanical
+          ? 'mechanical_imu_noise'
+          : 'severe_vibration',
+      confidence: 'high',
+      recommendationLevel: 'deferred',
+      nextAction: estimator
+        ? 'Resolve estimator or feedback signal anomalies before generating PID targets.'
+        : mechanical
+          ? 'Diagnostic first: inspect propellers, motors, frame stiffness, flight-controller mount, vibration isolation, sensors, and filter settings.'
+          : 'Diagnostic first: inspect mechanical vibration, sensors, estimator health, and filter settings before changing PID gains.',
+      reason: estimator
+        ? 'Estimator anomaly is present; PID recommendations are blocked.'
+        : mechanical
+          ? 'Mechanical or IMU noise is present without control-oscillation evidence; PID recommendations are blocked.'
+          : 'Severe vibration or severe oscillation is present; PID recommendations are blocked.',
+      evidence: uniqueStrings([...(tuningSafety.evidence || []), ...evidence]),
+    };
+  }
+
+  if (
+    loopName === 'rate' &&
+    tuningSafety.vibrationCategory === 'd_term_noise'
+  ) {
+    if (gain === 'D') {
+      return {
+        percent: -DEFAULT_TUNING_STEP_PERCENT,
+        phenomenon: 'd_term_noise',
+        confidence: 'medium',
+        reason:
+          'D-term or actuator high-frequency noise is present; reduce RATE_D conservatively.',
+        evidence: uniqueStrings([...(tuningSafety.evidence || []), ...evidence]),
+      };
+    }
+    return {
+      percent: 0,
+      phenomenon: 'd_term_noise',
+      confidence: 'medium',
+      reason:
+        'D-term or actuator high-frequency noise is present; do not adjust this gain first.',
+      evidence: uniqueStrings([...(tuningSafety.evidence || []), ...evidence]),
+    };
+  }
 
   if (primaryPhenomenon === 'severe_oscillation') {
     return {
       status: 'blocked',
       percent: 0,
-      phenomenon: 'severe_oscillation',
+      phenomenon: 'severe_vibration',
       confidence: 'high',
+      recommendationLevel: 'deferred',
+      nextAction:
+        'Diagnostic first: inspect mechanical vibration, sensors, estimator health, and filter settings before changing PID gains.',
       reason:
-        'Severe oscillation requires manual inspection before ordinary PID recommendations.',
+        'Severe vibration or severe oscillation is present; PID recommendations are blocked.',
       evidence,
     };
   }
@@ -826,6 +922,51 @@ function applyBoundedStep(currentValue, bound, requestedPercent) {
   };
 }
 
+function getDeferredNextAction(reason) {
+  const value = String(reason || '');
+  if (/setpoint excitation is too low/i.test(value)) {
+    return 'Select an analysis range with clear setpoint movement before generating PID targets.';
+  }
+  if (/not enough data samples/i.test(value)) {
+    return 'Select a longer analysis range with enough samples before generating PID targets.';
+  }
+  if (/analysis window is too short/i.test(value)) {
+    return 'Select a longer analysis range before generating PID targets.';
+  }
+  if (/delay estimate is/i.test(value)) {
+    return 'Select a range with a reliable delay estimate before generating PID targets.';
+  }
+  if (/current parameter value was not found/i.test(value)) {
+    return 'Import or include current PX4 parameters before generating PID targets.';
+  }
+  if (/fill min, max, and max step percent/i.test(value)) {
+    return 'Fill safety bounds before generating PID targets.';
+  }
+  if (/safety bounds are invalid/i.test(value)) {
+    return 'Fix safety bounds before generating PID targets.';
+  }
+  if (/changed inside the analysis window/i.test(value)) {
+    return 'Select a range where the parameter stays unchanged before generating PID targets.';
+  }
+  if (/actuator saturation/i.test(value)) {
+    return 'Resolve actuator saturation or review control authority before changing PID gains.';
+  }
+  if (/not healthy enough|not available/i.test(value)) {
+    return 'Handle upstream loop recommendations before tuning this downstream loop.';
+  }
+  if (/estimator or feedback signal anomalies/i.test(value)) {
+    return 'Resolve estimator or feedback signal anomalies before generating PID targets.';
+  }
+  return 'Review the blocking condition before generating PID targets.';
+}
+
+function buildUpstreamNextAction(upstreamReference) {
+  if (!upstreamReference) return null;
+  const parameters = upstreamReference.parameters || [];
+  const suffix = parameters.length ? `: ${parameters.join(', ')}` : '';
+  return `Handle upstream ${upstreamReference.loop} loop recommendation first${suffix}.`;
+}
+
 function buildParameterTarget({
   current,
   boundResult,
@@ -838,15 +979,19 @@ function buildParameterTarget({
   groupContext,
 }) {
   if (blockers.length) {
+    const reason = blockers[0];
+    const blockerMetadata = getTargetBlockerMetadata(reason);
     return {
       status: 'blocked',
       targetValue: null,
       changePercent: null,
-      reason: blockers[0],
+      reason,
       blockers,
-      phenomenon: 'blocked',
+      phenomenon: blockerMetadata.phenomenon,
       confidence: 'high',
       evidence: buildMetricEvidence(metricSummary),
+      recommendationLevel: 'deferred',
+      nextAction: blockerMetadata.nextAction,
     };
   }
 
@@ -860,6 +1005,8 @@ function buildParameterTarget({
       phenomenon: 'missing_current',
       confidence: 'high',
       evidence: buildMetricEvidence(metricSummary),
+      recommendationLevel: 'deferred',
+      nextAction: getDeferredNextAction('Current parameter value was not found in the log.'),
     };
   }
 
@@ -873,6 +1020,8 @@ function buildParameterTarget({
       phenomenon: 'bounds_required',
       confidence: 'high',
       evidence: buildMetricEvidence(metricSummary),
+      recommendationLevel: 'deferred',
+      nextAction: getDeferredNextAction('Fill min, max, and max step percent to generate a target value.'),
     };
   }
 
@@ -886,6 +1035,8 @@ function buildParameterTarget({
       phenomenon: 'invalid_bounds',
       confidence: 'high',
       evidence: buildMetricEvidence(metricSummary),
+      recommendationLevel: 'deferred',
+      nextAction: getDeferredNextAction('Safety bounds are invalid.'),
     };
   }
 
@@ -907,6 +1058,8 @@ function buildParameterTarget({
       phenomenon: step.phenomenon,
       confidence: step.confidence,
       evidence: step.evidence,
+      recommendationLevel: step.recommendationLevel || 'deferred',
+      nextAction: step.nextAction || getDeferredNextAction(step.reason),
     };
   }
 
@@ -920,6 +1073,30 @@ function buildParameterTarget({
       phenomenon: 'actuator_saturation',
       confidence: 'high',
       evidence: step.evidence,
+      recommendationLevel: 'deferred',
+      nextAction: getDeferredNextAction('Actuator saturation is high, so gain increases are blocked.'),
+    };
+  }
+
+  if (
+    step.percent > 0 &&
+    groupContext?.tuningSafety?.pidRecommendationPolicy === 'decrease_only'
+  ) {
+    return {
+      status: 'blocked',
+      targetValue: null,
+      changePercent: null,
+      reason: 'Moderate vibration is present, so gain increases are blocked.',
+      blockers: ['Moderate vibration is present, so gain increases are blocked.'],
+      phenomenon: groupContext.tuningSafety.vibrationCategory || 'mechanical_imu_noise',
+      confidence: 'high',
+      evidence: uniqueStrings([
+        ...(groupContext.tuningSafety.evidence || []),
+        ...(step.evidence || []),
+      ]),
+      recommendationLevel: 'deferred',
+      nextAction:
+        'Resolve vibration evidence before increasing PID gains; only conservative decreases are allowed.',
     };
   }
 
@@ -933,13 +1110,18 @@ function buildParameterTarget({
       phenomenon: step.phenomenon,
       confidence: step.confidence,
       evidence: step.evidence,
+      recommendationLevel: 'unchanged',
+      nextAction: 'Keep the current value unless follow-up analysis shows stronger evidence.',
     };
   }
 
   const boundedStep = applyBoundedStep(
     current.value,
     boundResult.value,
-    step.percent,
+    groupContext?.tuningSafety?.pidRecommendationPolicy === 'weak_only'
+      ? Math.sign(step.percent) *
+          Math.min(Math.abs(step.percent), WEAK_TUNING_STEP_PERCENT)
+      : step.percent,
   );
   if (!boundedStep) {
     return {
@@ -951,6 +1133,8 @@ function buildParameterTarget({
       phenomenon: step.phenomenon,
       confidence: step.confidence,
       evidence: step.evidence,
+      recommendationLevel: 'unchanged',
+      nextAction: 'Keep the current value or relax safety bounds after manual review.',
     };
   }
 
@@ -963,6 +1147,8 @@ function buildParameterTarget({
     phenomenon: step.phenomenon,
     confidence: step.confidence,
     evidence: step.evidence,
+    recommendationLevel: step.recommendationLevel || 'actionable',
+    nextAction: step.nextAction || 'Review the generated target before applying it.',
   };
 }
 
@@ -1635,6 +1821,162 @@ function getEstimatorBlockers(estimatorQuality) {
   return [];
 }
 
+function getSegmentSeriesDiffStd(topicCharts, topicNames, segment) {
+  const startS = isFiniteNumber(segment?.startS) ? segment.startS : -Infinity;
+  const endS = isFiniteNumber(segment?.endS) ? segment.endS : Infinity;
+  let maxDiffStd = 0;
+  let sampleCount = 0;
+
+  for (const topic of findTopics(topicCharts, topicNames)) {
+    for (const series of topic.series || []) {
+      const values = normalizePoints(series.points)
+        .filter((point) => point[0] >= startS && point[0] <= endS)
+        .map((point) => point[1]);
+      if (values.length < MIN_ALIGNED_POINTS) continue;
+      sampleCount += values.length;
+      maxDiffStd = Math.max(maxDiffStd, std(diff(values)));
+    }
+  }
+
+  return {
+    maxDiffStd: roundMetric(maxDiffStd),
+    sampleCount,
+  };
+}
+
+function computeTuningSafety({ topicCharts, loops, estimatorQuality, segment }) {
+  const evidence = [];
+  const estimatorBlockers = getEstimatorBlockers(estimatorQuality);
+  if (estimatorBlockers.length) {
+    return {
+      vibrationLevel: 'severe',
+      vibrationCategory: 'estimator_anomaly',
+      pidRecommendationPolicy: 'blocked',
+      evidence: estimatorBlockers,
+    };
+  }
+
+  const rateSummaries = getLoopMetricSummaries('rate', loops?.rate);
+  const rateHasSevereOscillation = rateSummaries.some(
+    (summary) => getOscillationSeverity(summary) === 'severe',
+  );
+  const rateHasHighOscillation = rateSummaries.some(
+    (summary) => getOscillationSeverity(summary) === 'high',
+  );
+  const rateHasHighNoise = rateSummaries.some(hasHighNoiseEvidence);
+  const rateHasRelativeHighFrequencyNoise = rateSummaries.some((summary) => {
+    if (!isFiniteNumber(summary.feedbackDiffStd)) return false;
+    const setpointDiffStd = summary.setpointDiffStd ?? 0;
+    return summary.feedbackDiffStd >= Math.max(setpointDiffStd * 1.2, EPS);
+  });
+  const maxZeroCrossingRate = maxMetricValue(
+    Object.values(loops?.rate?.axis || {}),
+    'effective_zero_crossing_rate',
+  );
+  const actuatorDiffStd = loops?.actuator?.metrics?.output_diff_std;
+  const actuatorHighFrequency =
+    isFiniteNumber(actuatorDiffStd) &&
+    actuatorDiffStd >= ACTUATOR_HIGH_FREQUENCY_DIFF_STD;
+  const sensorNoise = getSegmentSeriesDiffStd(
+    topicCharts,
+    ['sensor_gyro', 'sensor_accel', 'vehicle_acceleration'],
+    segment,
+  );
+
+  if (isFiniteNumber(maxZeroCrossingRate)) {
+    evidence.push(`rate_zero_crossing_rate=${roundMetric(maxZeroCrossingRate, 6)}`);
+  }
+  if (isFiniteNumber(actuatorDiffStd)) {
+    evidence.push(`actuator_output_diff_std=${roundMetric(actuatorDiffStd, 6)}`);
+  }
+  if (sensorNoise.sampleCount > 0) {
+    evidence.push(`sensor_diff_std=${roundMetric(sensorNoise.maxDiffStd, 6)}`);
+  }
+
+  if ((rateHasHighNoise || rateHasRelativeHighFrequencyNoise) && actuatorHighFrequency) {
+    return {
+      vibrationLevel: 'moderate',
+      vibrationCategory: 'd_term_noise',
+      pidRecommendationPolicy: 'decrease_only',
+      evidence: uniqueStrings([
+        'rate feedback noise and actuator high-frequency output are elevated',
+        ...evidence,
+      ]),
+    };
+  }
+
+  if (
+    sensorNoise.sampleCount > 0 &&
+    sensorNoise.maxDiffStd >= SENSOR_SEVERE_DIFF_STD &&
+    !actuatorHighFrequency
+  ) {
+    return {
+      vibrationLevel: 'severe',
+      vibrationCategory: 'mechanical_imu_noise',
+      pidRecommendationPolicy: 'diagnostic_only',
+      evidence: uniqueStrings([
+        'sensor gyro/accel high-frequency noise is elevated without matching actuator evidence',
+        ...evidence,
+      ]),
+    };
+  }
+
+  if (rateHasSevereOscillation) {
+    return {
+      vibrationLevel: 'severe',
+      vibrationCategory: 'control_oscillation',
+      pidRecommendationPolicy: 'diagnostic_only',
+      evidence: uniqueStrings([
+        'rate error zero-crossing evidence is severe',
+        ...evidence,
+      ]),
+    };
+  }
+
+  if (sensorNoise.sampleCount > 0 && sensorNoise.maxDiffStd >= SENSOR_SEVERE_DIFF_STD) {
+    return {
+      vibrationLevel: 'severe',
+      vibrationCategory: 'mechanical_imu_noise',
+      pidRecommendationPolicy: 'diagnostic_only',
+      evidence: uniqueStrings([
+        'sensor gyro/accel high-frequency noise is severe',
+        ...evidence,
+      ]),
+    };
+  }
+
+  if (rateHasHighOscillation) {
+    return {
+      vibrationLevel: 'moderate',
+      vibrationCategory: 'control_oscillation',
+      pidRecommendationPolicy: 'decrease_only',
+      evidence: uniqueStrings([
+        'rate error zero-crossing evidence is high',
+        ...evidence,
+      ]),
+    };
+  }
+
+  if (sensorNoise.sampleCount > 0 && sensorNoise.maxDiffStd >= SENSOR_MILD_DIFF_STD) {
+    return {
+      vibrationLevel: 'mild',
+      vibrationCategory: 'mechanical_imu_noise',
+      pidRecommendationPolicy: 'weak_only',
+      evidence: uniqueStrings([
+        'sensor gyro/accel high-frequency noise is mildly elevated',
+        ...evidence,
+      ]),
+    };
+  }
+
+  return {
+    vibrationLevel: 'none',
+    vibrationCategory: 'none',
+    pidRecommendationPolicy: 'normal',
+    evidence: uniqueStrings(evidence),
+  };
+}
+
 function parameterChangedInSegment(parameterProfile, parameter, segment) {
   if (!isFiniteNumber(segment?.startS) || !isFiniteNumber(segment?.endS)) {
     return false;
@@ -1723,16 +2065,39 @@ function assessLoopReadiness(loopName, loop) {
 }
 
 function getUpstreamBlockers(loopName, loopReadiness) {
-  const requiredUpstream = {
-    attitude: ['rate'],
-    velocity: ['rate', 'attitude'],
-    position: ['rate', 'attitude', 'velocity'],
-  }[loopName] || [];
+  const requiredUpstream = UPSTREAM_LOOP_REQUIREMENTS[loopName] || [];
 
   return requiredUpstream
     .map((upstreamLoop) => loopReadiness[upstreamLoop])
     .filter((state) => state && !state.healthy)
     .map((state) => state.reason);
+}
+
+function buildUpstreamReference(loopName, loopReadiness, loopResults) {
+  const requiredUpstream = UPSTREAM_LOOP_REQUIREMENTS[loopName] || [];
+  for (const upstreamLoop of requiredUpstream) {
+    const readiness = loopReadiness[upstreamLoop];
+    if (!readiness || readiness.healthy) continue;
+    const tuningLoop = loopResults[upstreamLoop];
+    const candidateItems = [
+      ...(tuningLoop?.parameters || []),
+      ...(tuningLoop?.displayParameters || []),
+    ];
+    const parameters = uniqueStrings(
+      candidateItems
+        .filter(
+          (item) =>
+            item?.status === 'target_generated' &&
+            isFiniteNumber(item.targetValue),
+        )
+        .map((item) => item.parameter),
+    );
+    return {
+      loop: upstreamLoop,
+      parameters,
+    };
+  }
+  return null;
 }
 
 function buildGroupContext({
@@ -1741,6 +2106,7 @@ function buildGroupContext({
   metricSummary,
   currentByParameter,
   actuatorSaturation,
+  tuningSafety,
 }) {
   const dParameter = group.parameters.find((item) => item.gain === 'D');
   const hasCurrentD = dParameter
@@ -1756,6 +2122,7 @@ function buildGroupContext({
   return {
     canIncreaseDForOvershoot,
     lowNoise,
+    tuningSafety,
   };
 }
 
@@ -1768,11 +2135,14 @@ function buildLoopParameterTuning({
   actuatorSaturation,
   globalBlockers,
   upstreamBlockers,
+  upstreamReference,
+  tuningSafety,
 }) {
   if (loopName === 'actuator') {
     return {
       status: 'not_applicable',
       parameters: [],
+      displayParameters: [],
       blockers: [],
       notes: ['Actuator output has no direct PID parameter mapping.'],
     };
@@ -1781,6 +2151,7 @@ function buildLoopParameterTuning({
   const groups = PARAMETER_TUNING_MAP[loopName] || [];
   const seenParameters = new Set();
   const parameters = [];
+  const displayParameters = [];
   const loopBlockers = new Set([...globalBlockers, ...upstreamBlockers]);
 
   if (actuatorSaturation.level === 'severe') {
@@ -1812,6 +2183,7 @@ function buildLoopParameterTuning({
       metricSummary,
       currentByParameter,
       actuatorSaturation,
+      tuningSafety,
     });
 
     for (const item of group.parameters) {
@@ -1851,16 +2223,18 @@ function buildLoopParameterTuning({
             groupContext,
           })
         : buildDisplayOnlyParameterTarget(current);
-      (target.blockers || []).forEach((blocker) => loopBlockers.add(blocker));
+      const upstreamNextAction = buildUpstreamNextAction(upstreamReference);
+      const contextualTarget =
+        target.recommendationLevel === 'deferred' && upstreamReference
+          ? {
+              ...target,
+              upstreamReference,
+              nextAction: upstreamNextAction || target.nextAction,
+            }
+          : target;
+      (contextualTarget.blockers || []).forEach((blocker) => loopBlockers.add(blocker));
       const currentValue = current ? roundMetric(current.value, 12) : null;
-      const shouldInclude =
-        target.status === 'target_generated' &&
-        isFiniteNumber(currentValue) &&
-        isFiniteNumber(target.targetValue) &&
-        Math.abs(target.targetValue - currentValue) > EPS;
-      if (!shouldInclude) continue;
-
-      parameters.push({
+      const tuningItem = {
         loop: loopName,
         axis: group.label,
         axes: group.axes,
@@ -1877,8 +2251,20 @@ function buildLoopParameterTuning({
             ? boundResult.value
             : null,
         metricSummary,
-        ...target,
-      });
+        ...contextualTarget,
+      };
+      if (targetable) {
+        displayParameters.push(tuningItem);
+      }
+      const shouldInclude =
+        contextualTarget.status === 'target_generated' &&
+        contextualTarget.recommendationLevel === 'actionable' &&
+        isFiniteNumber(currentValue) &&
+        isFiniteNumber(contextualTarget.targetValue) &&
+        Math.abs(contextualTarget.targetValue - currentValue) > EPS;
+      if (!shouldInclude) continue;
+
+      parameters.push(tuningItem);
     }
   }
 
@@ -1886,6 +2272,7 @@ function buildLoopParameterTuning({
   return {
     status: parameters.length ? 'available' : 'no_recommendation',
     parameters,
+    displayParameters,
     blockers,
     notes: [],
   };
@@ -1897,12 +2284,35 @@ function buildParameterTuning({
   parameterProfile,
   parameterBounds,
   estimatorQuality,
+  tuningSafety,
 }) {
   const actuatorSaturation = getActuatorSaturationState(loops);
   const globalBlockers = getEstimatorBlockers(estimatorQuality);
+  if (tuningSafety?.pidRecommendationPolicy === 'blocked') {
+    globalBlockers.push(
+      'Estimator or feedback signal anomalies were detected; PID recommendations are suppressed.',
+    );
+  }
+  if (tuningSafety?.pidRecommendationPolicy === 'diagnostic_only') {
+    if (tuningSafety.vibrationCategory === 'mechanical_imu_noise') {
+      globalBlockers.push(
+        'Mechanical or IMU noise is present without control-oscillation evidence; PID recommendations are blocked.',
+      );
+    } else {
+      globalBlockers.push(
+        'Severe vibration or severe oscillation is present; PID recommendations are blocked.',
+      );
+    }
+  }
   const result = {
     actuatorBlocksIncrease: actuatorSaturation.blocksIncrease,
     actuatorSaturationLevel: actuatorSaturation.level,
+    tuningSafety: tuningSafety || {
+      vibrationLevel: 'none',
+      vibrationCategory: 'none',
+      pidRecommendationPolicy: 'normal',
+      evidence: [],
+    },
     loops: {},
     warnings: [],
   };
@@ -1910,6 +2320,11 @@ function buildParameterTuning({
 
   for (const loopName of LOOP_ORDER) {
     const upstreamBlockers = getUpstreamBlockers(loopName, loopReadiness);
+    const upstreamReference = buildUpstreamReference(
+      loopName,
+      loopReadiness,
+      result.loops,
+    );
     result.loops[loopName] = buildLoopParameterTuning({
       loopName,
       loop: loops[loopName],
@@ -1919,6 +2334,8 @@ function buildParameterTuning({
       actuatorSaturation,
       globalBlockers,
       upstreamBlockers,
+      upstreamReference,
+      tuningSafety,
     });
     if (loopName !== 'actuator') {
       loopReadiness[loopName] = assessLoopReadiness(loopName, loops[loopName]);
@@ -1958,6 +2375,12 @@ function buildControlQualityReport(stored, options = {}) {
   };
 
   const estimatorQuality = computeEstimatorQuality(topicCharts, segment);
+  const tuningSafety = computeTuningSafety({
+    topicCharts,
+    loops,
+    estimatorQuality,
+    segment,
+  });
   const availableLoops = LOOP_ORDER.filter((loopName) => loops[loopName]?.status === 'available');
   const unavailableLoops = LOOP_ORDER.filter((loopName) => loops[loopName]?.status !== 'available');
   const report = {
@@ -1979,6 +2402,7 @@ function buildControlQualityReport(stored, options = {}) {
       parameterProfile: stored?.parameterProfile,
       parameterBounds: options.parameterBounds,
       estimatorQuality,
+      tuningSafety,
     }),
     estimator_quality: estimatorQuality,
     missing_topics: missingTopics,

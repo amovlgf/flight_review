@@ -204,19 +204,47 @@ export type ControlQualityParameterTuningItem = {
   phenomenon?: string
   confidence?: 'low' | 'medium' | 'high' | string
   evidence?: string[]
+  blockers?: string[]
+  recommendationLevel?: 'actionable' | 'risk_limited' | 'deferred' | 'unchanged' | string
+  nextAction?: string
+  upstreamReference?: {
+    loop: string
+    parameters: string[]
+  }
   reason: string
 }
 
 export type ControlQualityLoopParameterTuning = {
   status: string
   parameters: ControlQualityParameterTuningItem[]
+  displayParameters?: ControlQualityParameterTuningItem[]
   blockers?: string[]
   notes: string[]
+}
+
+export type ControlQualityTuningSafety = {
+  vibrationLevel?: 'none' | 'mild' | 'moderate' | 'severe' | string
+  vibrationCategory?:
+    | 'none'
+    | 'control_oscillation'
+    | 'd_term_noise'
+    | 'mechanical_imu_noise'
+    | 'estimator_anomaly'
+    | string
+  pidRecommendationPolicy?:
+    | 'normal'
+    | 'weak_only'
+    | 'decrease_only'
+    | 'diagnostic_only'
+    | 'blocked'
+    | string
+  evidence?: string[]
 }
 
 export type ControlQualityParameterTuning = {
   actuatorBlocksIncrease: boolean
   actuatorSaturationLevel?: 'none' | 'high' | 'severe' | string
+  tuningSafety?: ControlQualityTuningSafety
   loops: Record<string, ControlQualityLoopParameterTuning | undefined>
   warnings: string[]
 }

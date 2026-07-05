@@ -5,6 +5,7 @@ import ReactECharts from 'echarts-for-react'
 import ChartTimelineScrubber from './ChartTimelineScrubber'
 import type {
   ControlQualityLoopParameterTuning,
+  ControlQualityParameterTuningItem,
   ControlQualityAxis,
   ControlQualityLoop,
   ControlQualityReport,
@@ -358,6 +359,244 @@ function formatParameterValue(value: number | null | undefined) {
     return '-'
   }
   return value.toFixed(8).replace(/\.?0+$/, '')
+}
+
+function getTuningDisplayParameters(
+  tuning: ControlQualityLoopParameterTuning | undefined,
+) {
+  const displayParameters = tuning?.displayParameters ?? []
+  const source = displayParameters.length > 0 ? displayParameters : tuning?.parameters ?? []
+  return source.filter(
+    (item) =>
+      item &&
+      item.parameter &&
+      item.targetable !== false &&
+      item.status !== 'display_only',
+  )
+}
+
+function formatRecommendationTarget(item: ControlQualityParameterTuningItem) {
+  if (
+    item.status === 'target_generated' &&
+    typeof item.targetValue === 'number' &&
+    Number.isFinite(item.targetValue)
+  ) {
+    return formatParameterValue(item.targetValue)
+  }
+  if (item.status === 'unchanged') {
+    return '保持当前值'
+  }
+  return '暂不推荐'
+}
+
+function formatRecommendationLevel(item: ControlQualityParameterTuningItem) {
+  if (
+    item.phenomenon === 'severe_vibration' ||
+    item.phenomenon === 'mechanical_imu_noise' ||
+    item.phenomenon === 'estimator_anomaly'
+  ) {
+    return '诊断优先'
+  }
+  if (item.phenomenon === 'd_term_noise') return '仅保守降低'
+  if (item.recommendationLevel === 'risk_limited') return '人工复核'
+  if (item.recommendationLevel === 'deferred') return '等待处理'
+  if (item.recommendationLevel === 'unchanged' || item.status === 'unchanged') {
+    return '保持当前'
+  }
+  if (item.status === 'target_generated') return '可推荐'
+  return '等待处理'
+}
+
+function formatReferenceLoopName(loopName: string) {
+  return (
+    {
+      rate: '角速度环',
+      attitude: '姿态环',
+      velocity: '速度环',
+      position: '位置环',
+    }[loopName] || loopName
+  )
+}
+
+function formatUpstreamReference(
+  reference: ControlQualityParameterTuningItem['upstreamReference'],
+) {
+  if (!reference) return ''
+  const parameters = reference.parameters?.filter(Boolean) ?? []
+  const parameterText = parameters.length ? `：${parameters.join('、')}` : ''
+  return `先处理上游${formatReferenceLoopName(reference.loop)}推荐${parameterText}`
+}
+
+function formatNextAction(action: string) {
+  const value = action.trim()
+  if (!value) return ''
+  if (/diagnostic first|mechanical vibration|propellers|frame stiffness|mount|filter settings/i.test(value)) {
+    return '诊断优先：先检查桨叶、电机、机架刚性、飞控安装、减震、传感器和滤波配置。'
+  }
+  if (/only conservative decreases are allowed/i.test(value)) {
+    return '当前震动证据偏高，禁止增加增益，仅允许有控制证据时保守降低。'
+  }
+  if (/manual review|required|risk-limited/i.test(value)) {
+    return '需人工复核后再应用，不建议直接套用。'
+  }
+  if (/upstream/i.test(value)) {
+    const parameterMatch = value.match(/:\s*([A-Z0-9_,\s]+)\.?$/)
+    const parameterText = parameterMatch?.[1]
+      ?.split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join('、')
+    return parameterText
+      ? `先处理上游控制环推荐：${parameterText}`
+      : '先处理上游控制环推荐。'
+  }
+  if (/clear setpoint movement|setpoint movement|excitation/i.test(value)) {
+    return '请重新框选包含明显指令变化的片段后再生成推荐。'
+  }
+  if (/longer analysis range|enough samples/i.test(value)) {
+    return '请重新框选更长且样本充足的分析片段。'
+  }
+  if (/parameter stays unchanged/i.test(value)) {
+    return '请选择参数未发生变化的分析区间。'
+  }
+  if (/current PX4 parameters/i.test(value)) {
+    return '请先导入或保留当前 PX4 参数值。'
+  }
+  if (/safety bounds/i.test(value)) {
+    return '请先检查并补全安全边界。'
+  }
+  if (/actuator saturation/i.test(value)) {
+    return '请先处理执行器饱和或控制余量问题。'
+  }
+  if (/estimator|feedback signal/i.test(value)) {
+    return '请先处理估计器或反馈信号异常。'
+  }
+  return '请先处理阻断条件后再生成推荐。'
+}
+
+function formatTuningReason(reason: string, status?: string) {
+  const value = reason.trim()
+  if (!value) {
+    return status === 'target_generated'
+      ? '已根据当前控制环指标生成保守推荐值。'
+      : '当前条件不满足自动推荐要求，暂不生成 PID 推荐。'
+  }
+
+  const unhealthyLoopMatch = value.match(
+    /^(rate|attitude|velocity|position) loop is not healthy enough for downstream tuning\.?$/i,
+  )
+  if (unhealthyLoopMatch) {
+    const loopLabel =
+      {
+        rate: '上游角速度环',
+        attitude: '上游姿态环',
+        velocity: '上游速度环',
+        position: '位置环',
+      }[unhealthyLoopMatch[1].toLowerCase()] || '上游控制环'
+    return `${loopLabel}状态不健康，暂不生成下游 PID 推荐。`
+  }
+
+  const unavailableLoopMatch = value.match(
+    /^(rate|attitude|velocity|position) loop is not available for downstream tuning\.?$/i,
+  )
+  if (unavailableLoopMatch) {
+    const loopLabel =
+      {
+        rate: '角速度环',
+        attitude: '姿态环',
+        velocity: '速度环',
+        position: '位置环',
+      }[unavailableLoopMatch[1].toLowerCase()] || '控制环'
+    return `${loopLabel}数据不可用，暂不生成下游 PID 推荐。`
+  }
+
+  if (/setpoint excitation is too low/i.test(value)) {
+    return '当前片段期望指令激励不足，暂不生成 PID 推荐。'
+  }
+  if (/severe oscillation requires manual inspection/i.test(value)) {
+    return '检测到严重振荡，需要人工检查后再评估 PID。'
+  }
+  if (/severe vibration|severe oscillation is present/i.test(value)) {
+    return '检测到严重振荡或严重震动，诊断优先，暂不生成 PID 推荐。'
+  }
+  if (/mechanical or IMU noise/i.test(value)) {
+    return '检测到机械震动或 IMU 高频噪声，但缺少控制振荡证据；暂不推荐 PID，优先检查机械、安装、传感器和滤波。'
+  }
+  if (/D-term or actuator high-frequency noise/i.test(value)) {
+    return '检测到 D-term 或执行器高频抖动，优先保守降低 RATE_D，不优先调整 RATE_P。'
+  }
+  if (/Moderate vibration is present/i.test(value)) {
+    return '检测到中度震动，禁止增加增益，仅允许有控制证据时保守降低。'
+  }
+  if (/estimator or feedback signal anomalies/i.test(value)) {
+    return '估计器或反馈信号存在异常，暂不生成 PID 推荐。'
+  }
+  if (/severe actuator saturation/i.test(value)) {
+    return '执行器严重饱和，暂不生成常规 PID 推荐。'
+  }
+  if (/actuator saturation is high/i.test(value)) {
+    return '执行器输出接近饱和，暂不增加 PID 增益。'
+  }
+  if (/changed inside the analysis window/i.test(value)) {
+    return '该参数在分析区间内发生变化，暂不生成 PID 推荐。'
+  }
+  if (/current parameter value was not found/i.test(value)) {
+    return '日志中未找到当前参数值，暂不生成推荐值。'
+  }
+  if (/fill min, max, and max step percent/i.test(value)) {
+    return '缺少安全边界，暂不生成推荐值。'
+  }
+  if (/safety bounds are invalid/i.test(value)) {
+    return '安全边界无效，暂不生成推荐值。'
+  }
+  if (/not enough data samples/i.test(value)) {
+    return '当前片段样本数量不足，暂不生成 PID 推荐。'
+  }
+  if (/analysis window is too short/i.test(value)) {
+    return '当前分析区间过短，暂不生成 PID 推荐。'
+  }
+  if (/delay estimate is/i.test(value)) {
+    return '延迟估计状态不满足自动推荐要求，暂不生成 PID 推荐。'
+  }
+  if (/requested change is constrained/i.test(value)) {
+    return '当前值或安全边界限制了本次调整，建议保持当前值。'
+  }
+  if (/no strong metric evidence/i.test(value)) {
+    return '当前指标没有足够证据支持调整，建议保持当前值。'
+  }
+  if (/overshoot/i.test(value)) {
+    return '检测到超调偏高，建议按保守步长调整该参数。'
+  }
+  if (/oscillation/i.test(value) || /noise evidence/i.test(value)) {
+    return '检测到振荡或噪声偏高，建议按保守步长调整该参数。'
+  }
+  if (/tracking error|response is slow|phase delay/i.test(value)) {
+    return '跟随误差或响应延迟偏高，建议按保守步长调整该参数。'
+  }
+
+  if (status === 'target_generated') {
+    return '已根据当前控制环指标生成保守推荐值。'
+  }
+  if (status === 'unchanged') {
+    return '当前指标没有足够证据支持调整，建议保持当前值。'
+  }
+  return '当前条件不满足自动推荐要求，暂不生成 PID 推荐。'
+}
+
+function formatParameterReason(item: ControlQualityParameterTuningItem) {
+  const rawReasons = [...(item.blockers ?? []), item.reason]
+    .map((reason) => String(reason || '').trim())
+    .filter(Boolean)
+  const reasons = rawReasons.length ? rawReasons : ['']
+  const upstreamReference = formatUpstreamReference(item.upstreamReference)
+  const nextAction = item.nextAction ? formatNextAction(item.nextAction) : ''
+  return Array.from(
+    new Set([
+      ...reasons.map((reason) => formatTuningReason(reason, item.status)),
+      upstreamReference,
+      nextAction,
+    ].filter(Boolean)),
+  ).join('；')
 }
 
 function formatRangeInputValue(value: unknown) {
@@ -716,14 +955,7 @@ function ParameterTuningSection({
   tuning?: ControlQualityLoopParameterTuning
 }) {
   const blockers = tuning?.blockers?.filter(Boolean) ?? []
-  const parameters = (tuning?.parameters ?? []).filter(
-    (item) =>
-      item.status === 'target_generated' &&
-      typeof item.currentValue === 'number' &&
-      Number.isFinite(item.currentValue) &&
-      typeof item.targetValue === 'number' &&
-      Number.isFinite(item.targetValue),
-  )
+  const parameters = getTuningDisplayParameters(tuning)
 
   if (!tuning) {
     return (
@@ -743,7 +975,7 @@ function ParameterTuningSection({
         {blockers.length ? (
           <ul className="tuning-alert-list">
             {blockers.map((blocker) => (
-              <li key={blocker}>{blocker}</li>
+              <li key={blocker}>{formatTuningReason(blocker, 'blocked')}</li>
             ))}
           </ul>
         ) : (
@@ -763,6 +995,8 @@ function ParameterTuningSection({
               <th>参数</th>
               <th>当前值</th>
               <th>推荐值</th>
+              <th>风险级别</th>
+              <th>说明</th>
             </tr>
           </thead>
           <tbody>
@@ -779,8 +1013,20 @@ function ParameterTuningSection({
                 <td>{formatParameterValue(item.currentValue)}</td>
                 <td>
                   <span className="control-parameter-target">
-                    {formatParameterValue(item.targetValue)}
+                    {formatRecommendationTarget(item)}
                   </span>
+                </td>
+                <td>
+                  <span
+                    className={`control-parameter-level control-parameter-level-${
+                      item.recommendationLevel || item.status
+                    }`}
+                  >
+                    {formatRecommendationLevel(item)}
+                  </span>
+                </td>
+                <td className="control-parameter-reason">
+                  {formatParameterReason(item)}
                 </td>
               </tr>
             ))}

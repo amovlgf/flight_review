@@ -955,17 +955,26 @@
 }
 
 .control-parameter-table {
-  min-width: 420px;
+  min-width: 760px;
   table-layout: fixed;
 }
 
 .control-parameter-table th:first-child {
-  width: 48%;
+  width: 24%;
+}
+
+.control-parameter-table th:nth-child(2),
+.control-parameter-table td:nth-child(2),
+.control-parameter-table th:nth-child(3),
+.control-parameter-table td:nth-child(3),
+.control-parameter-table th:nth-child(4),
+.control-parameter-table td:nth-child(4) {
+  width: 14%;
 }
 
 .control-parameter-table th:last-child,
 .control-parameter-table td:last-child {
-  width: 26%;
+  width: 34%;
 }
 
 .control-parameter-name {
@@ -980,6 +989,44 @@
   min-width: 68px;
   color: #334155;
   font-weight: 700;
+}
+
+.control-parameter-level {
+  display: inline-flex;
+  min-width: 72px;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.control-parameter-level-risk_limited {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.control-parameter-level-deferred,
+.control-parameter-level-blocked,
+.control-parameter-level-missing_current,
+.control-parameter-level-bounds_required,
+.control-parameter-level-invalid_bounds {
+  background: #f8fafc;
+  color: #475569;
+}
+
+.control-parameter-level-unchanged {
+  background: #ecfdf5;
+  color: #166534;
+}
+
+.control-parameter-reason {
+  color: #475569;
+  line-height: 1.5;
 }
 
 .control-parameter-tooltip-trigger {

@@ -464,6 +464,14 @@ test('control quality report generates default-bounded recommendations and omits
   );
 
   assert.equal(rollFf, undefined);
+
+  const displayRollP = report.parameterTuning.loops.rate.displayParameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_P',
+  );
+
+  assert.equal(displayRollP.currentValue, 0.15);
+  assert.equal(displayRollP.status, 'target_generated');
+  assert.equal(displayRollP.targetValue, 0.14625);
 });
 
 test('control quality report uses latest stable parameter change before analysis start', () => {
@@ -762,7 +770,9 @@ test('control quality report keeps shared xy parameters unique and validates bou
 });
 
 test('rate abnormalities block attitude, velocity, and position recommendations', () => {
-  const topics = buildNormalControlTopics();
+  const topics = buildNormalControlTopics().filter(
+    (topic) => !topic.topic.startsWith('vehicle_local_position'),
+  );
   const stepPoints = buildStepPoints();
   const rateFeedback = stepPoints.map(([time, value]) => [
     time,
@@ -790,6 +800,21 @@ test('rate abnormalities block attitude, velocity, and position recommendations'
   assert.deepEqual(getTuningLoop(report, 'attitude').parameters, []);
   assert.deepEqual(getTuningLoop(report, 'velocity').parameters, []);
   assert.deepEqual(getTuningLoop(report, 'position').parameters, []);
+
+  const attitudeRollP = getTuningLoop(report, 'attitude').displayParameters.find(
+    (item) => item.parameter === 'MC_ROLL_P',
+  );
+
+  assert.equal(attitudeRollP.currentValue, 6);
+  assert.equal(attitudeRollP.targetValue, null);
+  assert.equal(attitudeRollP.status, 'blocked');
+  assert.equal(attitudeRollP.recommendationLevel, 'deferred');
+  assert.match(attitudeRollP.nextAction, /rate/i);
+  assert.deepEqual(attitudeRollP.upstreamReference, {
+    loop: 'rate',
+    parameters: ['MC_ROLLRATE_D'],
+  });
+  assert.match((attitudeRollP.blockers || []).join(' '), /rate loop/i);
 });
 
 test('parameter changes inside the analysis window block recommendations', () => {
@@ -882,6 +907,240 @@ test('severe actuator saturation suppresses ordinary PID target generation', () 
   assert.equal(report.parameterTuning.actuatorSaturationLevel, 'severe');
   assert.deepEqual(getTuningLoop(report, 'rate').parameters, []);
   assert.match(blockerText(getTuningLoop(report, 'rate')), /severe actuator saturation/i);
+});
+
+test('severe rate oscillation blocks PID targets and requires diagnostics', () => {
+  const setpoint = Array.from({ length: 81 }, (_, index) => {
+    const time = index * 0.1;
+    return [time, time < 1 ? 0 : 10];
+  });
+  const errorPattern = [5, 0, -5, 0];
+  const feedback = setpoint.map(([time, value], index) => [
+    time,
+    value - (time < 1 ? 0 : errorPattern[index % errorPattern.length]),
+  ]);
+
+  const report = buildControlQualityReport({
+    fileName: 'severe-rate-oscillation.ulg',
+    usedTopics: [
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: buildControlParameterProfile(),
+    topicCharts: [
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', setpoint)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', feedback)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 8,
+      source: 'manual',
+    },
+  });
+
+  const rateLoop = getTuningLoop(report, 'rate');
+  const rollP = rateLoop.displayParameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_P',
+  );
+
+  assert.equal(rollP.status, 'blocked');
+  assert.equal(rollP.recommendationLevel, 'deferred');
+  assert.equal(rollP.targetValue, null);
+  assert.equal(rollP.changePercent, null);
+  assert.equal(rollP.phenomenon, 'severe_vibration');
+  assert.match(rollP.nextAction, /diagnostic|mechanical|sensor|filter/i);
+  assert.deepEqual(rateLoop.parameters, []);
+  assert.equal(report.parameterTuning.tuningSafety.vibrationLevel, 'severe');
+  assert.equal(
+    report.parameterTuning.tuningSafety.pidRecommendationPolicy,
+    'diagnostic_only',
+  );
+});
+
+test('rate D-term noise lowers D without lowering P', () => {
+  const setpoint = Array.from({ length: 81 }, (_, index) => {
+    const time = index * 0.1;
+    return [time, time < 1 ? 0 : 10];
+  });
+  const feedback = setpoint.map(([time, value], index) => [
+    time,
+    value + (time < 1 ? 0 : index % 2 === 0 ? 0.8 : -0.8),
+  ]);
+  const actuator = setpoint.map(([time], index) => [
+    time,
+    0.5 + (time < 1 ? 0 : index % 2 === 0 ? 0.12 : -0.12),
+  ]);
+
+  const report = buildControlQualityReport({
+    fileName: 'rate-d-term-noise.ulg',
+    usedTopics: [
+      'actuator_motors',
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+    ],
+    parameterProfile: buildControlParameterProfile(),
+    topicCharts: [
+      {
+        topic: 'actuator_motors',
+        title: 'actuator_motors',
+        series: [buildSeries('control[0]', actuator)],
+      },
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', setpoint)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', feedback)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 8,
+      source: 'manual',
+    },
+  });
+
+  const rateLoop = getTuningLoop(report, 'rate');
+  const rollP = rateLoop.displayParameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_P',
+  );
+  const rollD = rateLoop.parameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_D',
+  );
+
+  assert.equal(rollP.status, 'unchanged');
+  assert.equal(rollP.targetValue, 0.15);
+  assert.equal(rollD.status, 'target_generated');
+  assert.equal(rollD.phenomenon, 'd_term_noise');
+  assert.equal(rollD.changePercent, -5);
+  assert.equal(report.parameterTuning.tuningSafety.vibrationCategory, 'd_term_noise');
+});
+
+test('mechanical IMU noise blocks PID recommendations when control evidence is absent', () => {
+  const setpoint = buildStepPoints();
+  const gyroNoise = Array.from({ length: 81 }, (_, index) => {
+    const time = index * 0.1;
+    return [time, index % 2 === 0 ? 4 : -4];
+  });
+  const accelNoise = gyroNoise.map(([time, value]) => [time, value * 1.5]);
+
+  const report = buildControlQualityReport({
+    fileName: 'mechanical-imu-noise.ulg',
+    usedTopics: [
+      'actuator_motors',
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+      'sensor_gyro',
+      'sensor_accel',
+    ],
+    parameterProfile: buildControlParameterProfile(),
+    topicCharts: [
+      ...buildNormalControlTopics().filter((topic) =>
+        ['actuator_motors', 'vehicle_rates_setpoint', 'vehicle_angular_velocity'].includes(topic.topic),
+      ),
+      {
+        topic: 'sensor_gyro',
+        title: 'sensor_gyro',
+        series: [buildSeries('x', gyroNoise)],
+      },
+      {
+        topic: 'sensor_accel',
+        title: 'sensor_accel',
+        series: [buildSeries('x', accelNoise)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 8,
+      source: 'manual',
+    },
+  });
+
+  const rateLoop = getTuningLoop(report, 'rate');
+  const rollP = rateLoop.displayParameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_P',
+  );
+
+  assert.deepEqual(rateLoop.parameters, []);
+  assert.equal(rollP.status, 'blocked');
+  assert.equal(rollP.phenomenon, 'mechanical_imu_noise');
+  assert.match(rollP.nextAction, /propeller|motor|frame|mount|filter/i);
+  assert.equal(report.parameterTuning.tuningSafety.vibrationLevel, 'severe');
+  assert.equal(
+    report.parameterTuning.tuningSafety.vibrationCategory,
+    'mechanical_imu_noise',
+  );
+});
+
+test('mild vibration limits ordinary increases to a weak step', () => {
+  const setpoint = buildStepPoints();
+  const delayedFeedback = setpoint.map(([time, value]) => [
+    time,
+    time >= 5 ? value - 4 : value,
+  ]);
+  const mildGyroNoise = Array.from({ length: 81 }, (_, index) => {
+    const time = index * 0.1;
+    return [time, index % 2 === 0 ? 0.25 : -0.25];
+  });
+
+  const report = buildControlQualityReport({
+    fileName: 'mild-vibration.ulg',
+    usedTopics: [
+      'vehicle_rates_setpoint',
+      'vehicle_angular_velocity',
+      'sensor_gyro',
+    ],
+    parameterProfile: buildControlParameterProfile(),
+    topicCharts: [
+      {
+        topic: 'vehicle_rates_setpoint',
+        title: 'vehicle_rates_setpoint',
+        series: [buildSeries('roll', setpoint)],
+      },
+      {
+        topic: 'vehicle_angular_velocity',
+        title: 'vehicle_angular_velocity',
+        series: [buildSeries('xyz[0]', delayedFeedback)],
+      },
+      {
+        topic: 'sensor_gyro',
+        title: 'sensor_gyro',
+        series: [buildSeries('x', mildGyroNoise)],
+      },
+    ],
+  }, {
+    segment: {
+      startS: 0,
+      endS: 10,
+      source: 'manual',
+    },
+  });
+
+  const rollI = getTuningLoop(report, 'rate').parameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_I',
+  );
+
+  assert.equal(rollI.status, 'target_generated');
+  assert.equal(rollI.changePercent, 2.5);
+  assert.equal(report.parameterTuning.tuningSafety.vibrationLevel, 'mild');
+  assert.equal(
+    report.parameterTuning.tuningSafety.pidRecommendationPolicy,
+    'weak_only',
+  );
 });
 
 test('rate overshoot prefers a small D increase only when D is usable', () => {
@@ -1069,4 +1328,15 @@ test('insufficient excitation reports blockers instead of parameter targets', ()
 
   assert.deepEqual(getTuningLoop(report, 'rate').parameters, []);
   assert.match(blockerText(getTuningLoop(report, 'rate')), /excitation/i);
+
+  const rollP = getTuningLoop(report, 'rate').displayParameters.find(
+    (item) => item.parameter === 'MC_ROLLRATE_P',
+  );
+
+  assert.equal(rollP.currentValue, 0.15);
+  assert.equal(rollP.targetValue, null);
+  assert.equal(rollP.status, 'blocked');
+  assert.equal(rollP.recommendationLevel, 'deferred');
+  assert.match(rollP.nextAction, /setpoint|excitation|框选|指令/i);
+  assert.match(rollP.reason, /excitation/i);
 });

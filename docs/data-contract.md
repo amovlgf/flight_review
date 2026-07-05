@@ -318,15 +318,34 @@ type ControlQualityReport = {
 
 `parameterTuning` reports recommended PX4 tuning parameter changes inferred
 from the selected control-loop curves. The backend uses the latest effective
-logged parameter value at the selected analysis range end. When
+logged parameter value before the selected analysis range start. When
 `parameterBounds` is omitted for a parameter, the backend uses a conservative
-default step limit of 5% and a default minimum of 0; only parameters with a
-generated target value different from the current value are returned.
+default step limit of 5% and a default minimum of 0; only actionable parameters
+with a generated target value different from the current value are returned in
+`parameters`.
 
 ```ts
 type ControlQualityParameterTuning = {
   actuatorBlocksIncrease: boolean;
   actuatorSaturationLevel?: 'none' | 'high' | 'severe' | string;
+  tuningSafety?: {
+    vibrationLevel?: 'none' | 'mild' | 'moderate' | 'severe' | string;
+    vibrationCategory?:
+      | 'none'
+      | 'control_oscillation'
+      | 'd_term_noise'
+      | 'mechanical_imu_noise'
+      | 'estimator_anomaly'
+      | string;
+    pidRecommendationPolicy?:
+      | 'normal'
+      | 'weak_only'
+      | 'decrease_only'
+      | 'diagnostic_only'
+      | 'blocked'
+      | string;
+    evidence?: string[];
+  };
   loops: Record<
     'actuator' | 'rate' | 'attitude' | 'velocity' | 'position' | string,
     {
@@ -354,6 +373,63 @@ type ControlQualityParameterTuning = {
         phenomenon?: string;
         confidence?: 'low' | 'medium' | 'high' | string;
         evidence?: string[];
+        blockers?: string[];
+        recommendationLevel?:
+          | 'actionable'
+          | 'risk_limited'
+          | 'deferred'
+          | 'unchanged'
+          | string;
+        nextAction?: string;
+        upstreamReference?: {
+          loop: string;
+          parameters: string[];
+        };
+        status:
+          | 'target_generated'
+          | 'bounds_required'
+          | 'invalid_bounds'
+          | 'missing_current'
+          | 'blocked'
+          | 'unchanged'
+          | 'display_only'
+          | string;
+        reason: string;
+      }>;
+      displayParameters?: Array<{
+        loop: string;
+        axis: string;
+        axes: string[];
+        gain: string;
+        role?: string;
+        targetable?: boolean;
+        parameter: string;
+        description?: string;
+        currentValue: number | null;
+        currentSource: 'initial' | 'changed' | 'missing' | string;
+        currentTimeS: number | null;
+        bounds: {
+          min: number;
+          max: number;
+          maxStepPercent: number;
+        } | null;
+        targetValue: number | null;
+        changePercent: number | null;
+        phenomenon?: string;
+        confidence?: 'low' | 'medium' | 'high' | string;
+        evidence?: string[];
+        blockers?: string[];
+        recommendationLevel?:
+          | 'actionable'
+          | 'risk_limited'
+          | 'deferred'
+          | 'unchanged'
+          | string;
+        nextAction?: string;
+        upstreamReference?: {
+          loop: string;
+          parameters: string[];
+        };
         status:
           | 'target_generated'
           | 'bounds_required'
@@ -372,10 +448,26 @@ type ControlQualityParameterTuning = {
 };
 ```
 
+`parameters` contains only `recommendationLevel: 'actionable'` generated
+recommendation changes whose target value is different from the current value.
 Items with `targetable: false`, unchanged targets, missing current values,
-invalid bounds, and blocked gain increases are omitted from the default
-recommendation list. `description` is intended for frontend tooltips beside
-the parameter name.
+invalid bounds, blocked gain increases, and `risk_limited` recommendations are
+omitted from this default recommendation list so export and downstream tooling
+only see directly actionable changes. `displayParameters` is the UI-oriented
+list of targetable PID parameters for the loop, including blocked, unchanged,
+`deferred`, and `risk_limited` items with their current value, optional target
+value, item-level `blockers`/`reason`, `nextAction`, and optional
+`upstreamReference` for localized display. `description` is intended for
+frontend tooltips beside the parameter name.
+
+`tuningSafety` summarizes the PID safety gate used before target generation.
+`vibrationCategory` separates control oscillation, D-term/actuator high
+frequency noise, mechanical/IMU noise, and estimator anomalies. Severe
+vibration, severe oscillation, mechanical/IMU noise without control evidence,
+or estimator anomalies use `diagnostic_only`/`blocked` policies and do not
+generate PID target values. Mild vibration downgrades ordinary steps to
+`±2.5%`; moderate vibration blocks gain increases and only allows conservative
+decreases when control-related evidence is present.
 
 The recommendation engine is conservative and ordered inner-to-outer. A rate
 loop issue blocks attitude, velocity, and position recommendations; an attitude
@@ -385,8 +477,9 @@ for example insufficient excitation, parameter changes inside the selected
 analysis window, estimator/feedback anomalies, upstream loop instability, or
 severe actuator saturation. `phenomenon`, `confidence`, and `evidence` describe
 the metric reason behind generated targets. The backend keeps single-step
-changes small: default maximum `±5%`, weak evidence `±2.5%`, and no ordinary
-target generation for severe oscillation or severe actuator saturation.
+changes small: default maximum `±5%`, weak evidence or mild vibration `±2.5%`,
+and no target generation for severe vibration, severe oscillation, estimator
+anomalies, or severe actuator saturation.
 
 For the `actuator` loop, `ControlQualityLoop` also returns `chart`, a list of
 executor output channels for the full available curve. Metric fields and

@@ -7,7 +7,7 @@ import type {
 } from '../types/log'
 
 function buildRecommendation(
-  overrides: Partial<ControlQualityParameterTuningItem> = {},
+  overrides: Partial<ControlQualityParameterTuningItem> & Record<string, unknown> = {},
 ): ControlQualityParameterTuningItem {
   return {
     loop: 'rate',
@@ -28,7 +28,7 @@ function buildRecommendation(
     changePercent: -5,
     reason: 'Overshoot is high, reduce gain conservatively.',
     ...overrides,
-  }
+  } as ControlQualityParameterTuningItem
 }
 
 function buildReport(
@@ -118,12 +118,29 @@ describe('ControlQualityPanel parameter recommendations', () => {
 
     expect(html).toContain('当前区间未发现需要调整的 PID 参数。')
   })
-  it('renders blocker reasons when recommendations are suppressed', () => {
+  it('renders blocked display parameters with Chinese recommendation text', () => {
     const report = buildReport([])
     const rateTuning = report.parameterTuning?.loops.rate
     if (rateTuning) {
       rateTuning.blockers = [
         'Rate loop is not healthy enough for downstream tuning.',
+      ]
+      ;(
+        rateTuning as typeof rateTuning & {
+          displayParameters: Array<
+            ControlQualityParameterTuningItem & { blockers: string[] }
+          >
+        }
+      ).displayParameters = [
+        {
+          ...buildRecommendation({
+            status: 'blocked',
+            targetValue: null,
+            changePercent: null,
+            reason: 'Rate loop is not healthy enough for downstream tuning.',
+          }),
+          blockers: ['Rate loop is not healthy enough for downstream tuning.'],
+        },
       ]
     }
 
@@ -137,8 +154,181 @@ describe('ControlQualityPanel parameter recommendations', () => {
       />,
     )
 
-    expect(html).toContain(
+    expect(html).toContain('MC_ROLLRATE_P')
+    expect(html).toContain('0.15')
+    expect(html).toContain('暂不推荐')
+    expect(html).toContain('上游角速度环状态不健康，暂不生成下游 PID 推荐。')
+    expect(html).not.toContain(
       'Rate loop is not healthy enough for downstream tuning.',
     )
+  })
+
+  it('renders risk-limited recommendations with manual review warning', () => {
+    const report = buildReport([])
+    const rateTuning = report.parameterTuning?.loops.rate
+    if (rateTuning) {
+      rateTuning.displayParameters = [
+        buildRecommendation({
+          recommendationLevel: 'risk_limited',
+          nextAction:
+            'Manual review is required before applying this risk-limited recommendation.',
+          reason:
+            'Severe oscillation is present; reduce P conservatively and review manually.',
+        }),
+      ]
+    }
+
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={report}
+        isLoading={false}
+        errorText=""
+        onApplyRange={() => {}}
+      />,
+    )
+
+    expect(html).toContain('MC_ROLLRATE_P')
+    expect(html).toContain('0.1425')
+    expect(html).toContain('人工复核')
+    expect(html).toContain('需人工复核')
+  })
+
+  it('renders diagnostic-first text for severe vibration blockers', () => {
+    const report = buildReport([])
+    const rateTuning = report.parameterTuning?.loops.rate
+    if (rateTuning) {
+      rateTuning.displayParameters = [
+        buildRecommendation({
+          status: 'blocked',
+          targetValue: null,
+          changePercent: null,
+          recommendationLevel: 'deferred',
+          phenomenon: 'severe_vibration',
+          reason:
+            'Severe vibration or severe oscillation is present; PID recommendations are blocked.',
+          nextAction:
+            'Diagnostic first: inspect mechanical vibration, sensors, estimator health, and filter settings before changing PID gains.',
+        }),
+      ]
+    }
+
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={report}
+        isLoading={false}
+        errorText=""
+        onApplyRange={() => {}}
+      />,
+    )
+
+    expect(html).toContain('诊断优先')
+    expect(html).toContain('暂不推荐')
+    expect(html).toContain('严重振荡或严重震动')
+    expect(html).not.toContain('Severe vibration or severe oscillation')
+  })
+
+  it('renders conservative D-term noise guidance', () => {
+    const report = buildReport([])
+    const rateTuning = report.parameterTuning?.loops.rate
+    if (rateTuning) {
+      rateTuning.displayParameters = [
+        buildRecommendation({
+          parameter: 'MC_ROLLRATE_D',
+          gain: 'D',
+          recommendationLevel: 'actionable',
+          phenomenon: 'd_term_noise',
+          reason:
+            'D-term or actuator high-frequency noise is present; reduce RATE_D conservatively.',
+        }),
+      ]
+    }
+
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={report}
+        isLoading={false}
+        errorText=""
+        onApplyRange={() => {}}
+      />,
+    )
+
+    expect(html).toContain('MC_ROLLRATE_D')
+    expect(html).toContain('仅保守降低')
+    expect(html).toContain('优先保守降低 RATE_D')
+    expect(html).not.toContain('D-term or actuator high-frequency noise')
+  })
+
+  it('renders upstream reference for deferred downstream recommendations', () => {
+    const report = buildReport([])
+    const attitudeTuning = report.parameterTuning?.loops.attitude
+    if (attitudeTuning) {
+      attitudeTuning.displayParameters = [
+        buildRecommendation({
+          loop: 'attitude',
+          parameter: 'MC_ROLL_P',
+          currentValue: 6,
+          status: 'blocked',
+          targetValue: null,
+          changePercent: null,
+          recommendationLevel: 'deferred',
+          reason: 'Rate loop is not healthy enough for downstream tuning.',
+          nextAction:
+            'Handle upstream rate loop recommendation first: MC_ROLLRATE_D.',
+          upstreamReference: {
+            loop: 'rate',
+            parameters: ['MC_ROLLRATE_D'],
+          },
+        }),
+      ]
+    }
+
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={report}
+        isLoading={false}
+        errorText=""
+        onApplyRange={() => {}}
+      />,
+    )
+
+    expect(html).toContain('MC_ROLL_P')
+    expect(html).toContain('暂不推荐')
+    expect(html).toContain('先处理上游角速度环推荐：MC_ROLLRATE_D')
+    expect(html).not.toContain('Rate loop is not healthy enough')
+  })
+
+  it('renders low-excitation next action instead of a generic blocker', () => {
+    const report = buildReport([])
+    const rateTuning = report.parameterTuning?.loops.rate
+    if (rateTuning) {
+      rateTuning.displayParameters = [
+        buildRecommendation({
+          status: 'blocked',
+          targetValue: null,
+          changePercent: null,
+          recommendationLevel: 'deferred',
+          reason: 'rate roll: setpoint excitation is too low for PID recommendation.',
+          nextAction:
+            'Select an analysis range with clear setpoint movement before generating PID targets.',
+        }),
+      ]
+    }
+
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={report}
+        isLoading={false}
+        errorText=""
+        onApplyRange={() => {}}
+      />,
+    )
+
+    expect(html).toContain('请重新框选包含明显指令变化的片段')
+    expect(html).not.toContain('setpoint excitation is too low')
   })
 })
