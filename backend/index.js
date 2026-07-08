@@ -26,6 +26,7 @@ const {
   resolveRole,
   filterTopicChartsByRole,
 } = require('./services/rolePolicyService');
+const { buildFlightSummaryResponse } = require('./services/flightSummaryService');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -295,6 +296,28 @@ app.get('/api/logs/chart-data', (req, res) => {
     topicCharts: filteredTopicCharts,
     diagnostics: stored.diagnostics,
   }));
+});
+
+app.post('/api/logs/:logId/flight-summary', (req, res) => {
+  const logId = typeof req.params.logId === 'string' ? req.params.logId.trim() : '';
+  if (!logId) {
+    return res.status(400).json({
+      code: 'LOG_ID_REQUIRED',
+      message: 'logId is required.',
+    });
+  }
+
+  const stored = parsedLogStore.get(logId);
+  if (!stored) {
+    return res.status(404).json({
+      code: 'LOG_NOT_FOUND',
+      message: 'Log not found. Please upload first.',
+      logId,
+    });
+  }
+
+  ensureStoredLogParsed(stored);
+  return res.json(buildFlightSummaryResponse(stored));
 });
 
 app.post('/api/logs/control-quality', (req, res) => {

@@ -84,3 +84,13 @@ test('POST /api/logs/:logId/incident-analysis reports missing uploaded log', asy
   assert.equal(response.body.code, 'LOG_NOT_FOUND');
   assert.equal(response.body.logId, 'not-uploaded');
 });
+
+test('POST /api/logs/:logId/flight-summary reports missing uploaded log', async () => {
+  const response = await request(app)
+    .post('/api/logs/not-uploaded/flight-summary')
+    .send({})
+    .expect(404);
+
+  assert.equal(response.body.code, 'LOG_NOT_FOUND');
+  assert.equal(response.body.logId, 'not-uploaded');
+});

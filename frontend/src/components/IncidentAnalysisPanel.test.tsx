@@ -51,7 +51,24 @@ function buildReport(): IncidentAnalysisResponse {
       unlockCount: 1,
     },
     phases: [],
-    timeline: [],
+    timeline: [buildEvent()],
+    eventGroups: [
+      {
+        id: 'takeoff-group',
+        phase: 'takeoff',
+        severity: 'info',
+        startTimeS: 66.44,
+        endTimeS: 66.44,
+        title: 'Takeoff events',
+        summary: 'Takeoff complete and related state events.',
+        primaryEvents: [buildEvent()],
+        evidenceEvents: [],
+        rawEvents: [buildEvent()],
+        evidenceSignals: ['takeoff.state'],
+        evidenceLinks: [],
+        chartPreset: 'takeoffEvidence',
+      },
+    ],
     anomalySummary: {
       version: 'incident-anomaly.v2.0',
       status: 'no_critical_detected',
@@ -134,7 +151,7 @@ function buildEvent(): IncidentTimelineEvent {
 }
 
 describe('IncidentAnalysisPanel evidence chart helpers', () => {
-  it('presents feature one as a summary-first routine log analysis page', () => {
+  it('presents feature one as an event timeline with event icons only', () => {
     const html = renderToStaticMarkup(
       <IncidentAnalysisPanel
         selectedLogId="log-1"
@@ -146,13 +163,18 @@ describe('IncidentAnalysisPanel evidence chart helpers', () => {
     )
 
     expect(html).toContain('功能 1：常规日志分析')
-    expect(html).toContain('关键摘要')
-    expect(html).toContain('异常摘要')
-    expect(html).toContain('异常提示')
     expect(html).toContain('飞行事件时间线')
-    expect(html).toContain('数据限制 / 高级诊断')
-    expect(html).not.toContain('证据图表</h3>')
+    expect(html).toContain('incident-event-icon')
+    expect(html).toContain('aria-label="takeoff"')
+    expect(html).toContain('Takeoff events')
+    expect(html).not.toContain('关键摘要')
+    expect(html).not.toContain('异常摘要')
+    expect(html).not.toContain('异常提示')
+    expect(html).not.toContain('飞行阶段')
+    expect(html).not.toContain('数据限制 / 高级诊断')
+    expect(html).not.toContain('证据图表')
     expect(html).not.toContain('显示字段')
+    expect(html).not.toContain('展开原始事件')
     expect(html).not.toContain('功能 1 V1.3')
     expect(html).not.toContain('运行 V1.3 分析')
     expect(html).not.toContain('V2 异常检测框架')

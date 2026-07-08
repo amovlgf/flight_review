@@ -320,9 +320,9 @@ type ControlQualityReport = {
 from the selected control-loop curves. The backend uses the latest effective
 logged parameter value before the selected analysis range start. When
 `parameterBounds` is omitted for a parameter, the backend uses a conservative
-default step limit of 5% and a default minimum of 0; only actionable parameters
-with a generated target value different from the current value are returned in
-`parameters`.
+default step limit of 5% and a default minimum of 0; generated target values
+different from the current value are returned in `parameters`, including
+`risk_limited` targets that are executable but direction/step limited.
 
 ```ts
 type ControlQualityParameterTuning = {
@@ -339,8 +339,7 @@ type ControlQualityParameterTuning = {
       | string;
     pidRecommendationPolicy?:
       | 'normal'
-      | 'weak_only'
-      | 'decrease_only'
+      | 'risk_limited'
       | 'diagnostic_only'
       | 'blocked'
       | string;
@@ -377,9 +376,13 @@ type ControlQualityParameterTuning = {
         recommendationLevel?:
           | 'actionable'
           | 'risk_limited'
+          | 'manual_review'
           | 'deferred'
           | 'unchanged'
           | string;
+        allowedDirection?: 'increase' | 'decrease' | 'both' | 'hold' | string;
+        stepLimitPercent?: number;
+        riskReason?: string | null;
         nextAction?: string;
         upstreamReference?: {
           loop: string;
@@ -387,6 +390,7 @@ type ControlQualityParameterTuning = {
         };
         status:
           | 'target_generated'
+          | 'manual_candidate'
           | 'bounds_required'
           | 'invalid_bounds'
           | 'missing_current'
@@ -422,9 +426,13 @@ type ControlQualityParameterTuning = {
         recommendationLevel?:
           | 'actionable'
           | 'risk_limited'
+          | 'manual_review'
           | 'deferred'
           | 'unchanged'
           | string;
+        allowedDirection?: 'increase' | 'decrease' | 'both' | 'hold' | string;
+        stepLimitPercent?: number;
+        riskReason?: string | null;
         nextAction?: string;
         upstreamReference?: {
           loop: string;
@@ -432,6 +440,7 @@ type ControlQualityParameterTuning = {
         };
         status:
           | 'target_generated'
+          | 'manual_candidate'
           | 'bounds_required'
           | 'invalid_bounds'
           | 'missing_current'
@@ -448,37 +457,45 @@ type ControlQualityParameterTuning = {
 };
 ```
 
-`parameters` contains only `recommendationLevel: 'actionable'` generated
-recommendation changes whose target value is different from the current value.
-Items with `targetable: false`, unchanged targets, missing current values,
-invalid bounds, blocked gain increases, and `risk_limited` recommendations are
-omitted from this default recommendation list so export and downstream tooling
-only see directly actionable changes. `displayParameters` is the UI-oriented
-list of targetable PID parameters for the loop, including blocked, unchanged,
-`deferred`, and `risk_limited` items with their current value, optional target
-value, item-level `blockers`/`reason`, `nextAction`, and optional
+`parameters` contains generated recommendation changes whose target value is
+different from the current value. This includes `actionable` and
+`risk_limited` items because both have executable target values. Items with
+`targetable: false`, unchanged targets, missing current values, invalid bounds,
+blocked/diagnostic-only conditions, and `manual_candidate` targets are omitted
+from this default
+recommendation list. `displayParameters` is the UI-oriented list of targetable
+PID parameters for the loop, including executable, blocked, unchanged,
+`deferred`, `risk_limited`, and `manual_review`/`manual_candidate` items with
+their current value, optional target value, item-level `blockers`/`reason`,
+`allowedDirection`, `stepLimitPercent`, `riskReason`, `nextAction`, and optional
 `upstreamReference` for localized display. `description` is intended for
 frontend tooltips beside the parameter name.
 
 `tuningSafety` summarizes the PID safety gate used before target generation.
 `vibrationCategory` separates control oscillation, D-term/actuator high
-frequency noise, mechanical/IMU noise, and estimator anomalies. Severe
-vibration, severe oscillation, mechanical/IMU noise without control evidence,
-or estimator anomalies use `diagnostic_only`/`blocked` policies and do not
-generate PID target values. Mild vibration downgrades ordinary steps to
-`±2.5%`; moderate vibration blocks gain increases and only allows conservative
-decreases when control-related evidence is present.
+frequency noise, mechanical/IMU noise, and estimator anomalies. Data-quality
+failures, estimator/feedback anomalies, severe actuator saturation, and severe
+control oscillation use `blocked` or `diagnostic_only` and do not generate
+executable PID target values. Severe control oscillation may emit
+`manual_candidate` entries in `displayParameters` only: these are manual-review
+values, are not exported through `parameters`, and use a conservative decrease
+step capped at 2.5%. Mechanical/IMU noise without severe control-oscillation
+evidence and D-term/actuator high-frequency noise use `risk_limited`: target
+generation may continue, but `allowedDirection` and `stepLimitPercent` restrict
+the recommendation. Severe mechanical/IMU-only noise can still emit conservative
+roll/pitch `RATE_D` decreases while keeping gain increases limited. Risk-limited
+steps are capped at 2.5%.
 
-The recommendation engine is conservative and ordered inner-to-outer. A rate
-loop issue blocks attitude, velocity, and position recommendations; an attitude
-issue blocks velocity and position recommendations; a velocity issue blocks
-position recommendations. `blockers` explains why a loop has no recommendation,
+The recommendation engine is conservative and ordered inner-to-outer. Severe
+or data-quality upstream loop issues block downstream recommendations; mild or
+moderate upstream risk only downgrades recommendations to conservative behavior.
+`blockers` explains why a loop has no recommendation,
 for example insufficient excitation, parameter changes inside the selected
 analysis window, estimator/feedback anomalies, upstream loop instability, or
 severe actuator saturation. `phenomenon`, `confidence`, and `evidence` describe
 the metric reason behind generated targets. The backend keeps single-step
-changes small: default maximum `±5%`, weak evidence or mild vibration `±2.5%`,
-and no target generation for severe vibration, severe oscillation, estimator
+changes small: default maximum `±5%`, weak evidence and `risk_limited` states
+`±2.5%`, and no target generation for severe control oscillation, estimator
 anomalies, or severe actuator saturation.
 
 For the `actuator` loop, `ControlQualityLoop` also returns `chart`, a list of
@@ -1092,3 +1109,206 @@ When `logId` is missing, the endpoint returns HTTP `400` with `code:
 'LOG_ID_REQUIRED'`. When the log is not found, it returns HTTP `404` with
 `code: 'LOG_NOT_FOUND'`. In both cases, `series`, `topicCharts`, `diagnostics`,
 `modeSegments`, and `usedTopics` are empty arrays.
+
+## POST /api/logs/:logId/flight-summary
+
+This endpoint powers feature 1, the single-log flight summary tool. It is
+independent from the batch screening and control-loop analysis endpoints. It
+does not return PID recommendations, root-cause diagnosis, hardware-failure
+probability, anomaly scores, detector versions, or raw debug fields.
+
+### Request
+
+```http
+POST /api/logs/:logId/flight-summary
+```
+
+The `logId` path parameter must reference a log already uploaded through
+`POST /api/logs/upload`.
+
+### Success Response
+
+```ts
+type FlightSummaryResponse = {
+  contractVersion: 'flight-summary.v1';
+  code: 'OK' | 'DATA_GATE_BLOCKED';
+  message: string;
+  logId: string;
+  fileName: string;
+  uploadedAt: string;
+  metadata: LogMetadata;
+  dataGate: FlightSummaryDataGate;
+  summary: FlightSummaryBasicInfo | null;
+  phases: FlightSummaryPhase[];
+  flightStatus: FlightSummaryFlightStatus | null;
+  reportMarkdown: string | null;
+  parser: {
+    success: boolean;
+    error: string | null;
+  };
+};
+```
+
+```ts
+type FlightSummaryDataGate = {
+  canAnalyze: boolean;
+  missingRequired: string[];
+  missingOptional: string[];
+  blockingReasons: string[];
+  limitations: string[];
+};
+
+type FlightSummaryBasicInfo = {
+  totalDurationS: number | null;
+  armedAtS: number | null;
+  takeoffAtS: number | null;
+  landingAtS: number | null;
+  failsafeTriggered: boolean | null;
+  dataCompleteness: 'complete' | 'partial' | string;
+  armedFlightTimeS?: number | null;
+};
+
+type FlightSummaryPhase = {
+  id: string;
+  name: string;
+  startS: number;
+  endS: number;
+  durationS: number;
+  modeChanges: Array<{
+    startS: number;
+    endS: number;
+    mode: string;
+    modeCode: number;
+  }>;
+  sourceSignals: string[];
+  charts: FlightSummaryEmbeddedChart[];
+};
+
+type FlightSummaryEmbeddedChart = {
+  id: string;
+  title: string;
+  series: Array<ChartSeries & {
+    source?: {
+      topic: string;
+      instance: number;
+      field: string;
+    } | null;
+  }>;
+};
+
+type FlightSummaryFlightStatus = {
+  failsafe: {
+    triggered: boolean;
+    events: Array<{
+      id: string;
+      startS: number;
+      endS: number | null;
+      durationS: number | null;
+      phaseId: string;
+      phaseName: string;
+      mode: string;
+      activeFlags: string[];
+    }>;
+    mainChanges: string[];
+    charts: FlightSummaryEmbeddedChart[];
+  };
+  estimator: {
+    status: string;
+    localPositionValid: boolean | null;
+    globalPositionValid: boolean | null;
+    horizontalPositionValid: boolean | null;
+    verticalPositionValid: boolean | null;
+    gpsStatus: string;
+    satellitesUsed: number | string | null;
+    heightSource: string;
+    changes: Array<{
+      signal: string;
+      timeS: number;
+      value: number;
+    }>;
+    charts: FlightSummaryEmbeddedChart[];
+  };
+};
+```
+
+### Data Gate
+
+Required data groups:
+
+```text
+timestamp
+vehicle_status
+vehicle_land_detected
+vehicle_local_position or vehicle_global_position
+```
+
+If any required group is missing, the endpoint returns HTTP `200` with
+`code: 'DATA_GATE_BLOCKED'`, `dataGate.canAnalyze: false`, populated
+`missingRequired` and `blockingReasons`, and no analysis payload:
+
+```ts
+{
+  summary: null,
+  phases: [],
+  flightStatus: null,
+  reportMarkdown: null
+}
+```
+
+Optional data groups:
+
+```text
+battery_status
+sensor_combined
+estimator_status
+estimator_innovations
+estimator_innovation_test_ratios
+failsafe_flags
+actuator_outputs
+vehicle_attitude
+vehicle_attitude_setpoint
+vehicle_rates_setpoint
+vehicle_angular_velocity
+```
+
+Missing optional groups do not block analysis. They are returned in
+`dataGate.missingOptional`, described in `dataGate.limitations`, and should be
+shown as data limitations in the feature 1 page and Markdown report.
+
+### Error Responses
+
+When `logId` is empty, the endpoint returns HTTP `400`:
+
+```ts
+{
+  code: 'LOG_ID_REQUIRED',
+  message: 'logId is required.'
+}
+```
+
+When the uploaded log is not found, the endpoint returns HTTP `404`:
+
+```ts
+{
+  code: 'LOG_NOT_FOUND',
+  message: 'Log not found. Please upload first.',
+  logId: string
+}
+```
+
+### Report Contract
+
+`reportMarkdown` is a fixed short Markdown report with these sections:
+
+```text
+# Flight Log Short Report
+1. Basic log information
+2. Flight phases
+3. Flight status
+4. Data limitations
+5. Engineer note
+```
+
+The report only summarizes flight phases, flight modes, failsafe status, and
+estimator / positioning fusion status. It must not include root-cause
+diagnosis, hardware-failure conclusions, or PID tuning advice.

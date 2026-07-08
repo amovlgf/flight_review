@@ -21,6 +21,7 @@ const HIGH_TRACKING_ERROR_NRMSE = 0.25;
 const HIGH_DELAY_S = 0.15;
 const ACTUATOR_HIGH_FREQUENCY_DIFF_STD = 0.08;
 const SENSOR_MILD_DIFF_STD = 0.35;
+const SENSOR_MODERATE_DIFF_STD = 1.0;
 const SENSOR_SEVERE_DIFF_STD = 3.0;
 
 const REQUIRED_TOPICS = [
@@ -649,6 +650,115 @@ function getPrimaryPhenomenon(metricSummary) {
   return 'none';
 }
 
+function getRiskLimitedReason(tuningSafety) {
+  if (!tuningSafety || tuningSafety.pidRecommendationPolicy !== 'risk_limited') {
+    return null;
+  }
+  if (tuningSafety.vibrationCategory === 'd_term_noise') {
+    return 'D-term or actuator high-frequency noise is present; gain increases are limited and RATE_D decreases are preferred.';
+  }
+  if (tuningSafety.vibrationCategory === 'mechanical_imu_noise') {
+    return 'Mechanical or IMU high-frequency noise is present; gain increases are limited and small RATE_D decreases are preferred.';
+  }
+  if (tuningSafety.vibrationCategory === 'control_oscillation') {
+    return 'Control oscillation evidence is elevated; only conservative decreases are allowed.';
+  }
+  return 'Risk evidence is present; PID recommendations are limited to conservative changes.';
+}
+
+function getRiskLimitedDirection({
+  loopName,
+  axisLabel,
+  gain,
+  primaryPhenomenon,
+  tuningSafety,
+}) {
+  if (tuningSafety?.pidRecommendationPolicy !== 'risk_limited') {
+    return {
+      allowedDirection: 'both',
+      stepLimitPercent: DEFAULT_TUNING_STEP_PERCENT,
+      riskReason: null,
+    };
+  }
+
+  const category = tuningSafety.vibrationCategory;
+  const riskReason = getRiskLimitedReason(tuningSafety);
+  let allowedDirection = 'both';
+
+  if (category === 'control_oscillation') {
+    allowedDirection = gain === 'I' ? 'hold' : 'decrease';
+  } else if (category === 'd_term_noise') {
+    if (loopName === 'rate' && gain === 'D') {
+      allowedDirection = 'decrease';
+    } else if (loopName === 'rate' && gain === 'P') {
+      allowedDirection = 'decrease';
+    } else if (gain === 'I') {
+      allowedDirection = 'hold';
+    } else {
+      allowedDirection = 'both';
+    }
+  } else if (category === 'mechanical_imu_noise') {
+    if (loopName === 'rate' && gain === 'D' && axisLabel !== 'yaw') {
+      allowedDirection = 'decrease';
+    } else if ((loopName === 'rate' || loopName === 'attitude') && gain === 'P') {
+      allowedDirection = 'decrease';
+    } else if (gain === 'I') {
+      allowedDirection = primaryPhenomenon === 'steady_error' ? 'increase' : 'hold';
+    } else {
+      allowedDirection = 'both';
+    }
+  }
+
+  return {
+    allowedDirection,
+    stepLimitPercent: WEAK_TUNING_STEP_PERCENT,
+    riskReason,
+  };
+}
+
+function allowsDirection(allowedDirection, percent) {
+  if (Math.abs(percent) <= EPS) return true;
+  if (allowedDirection === 'both') return true;
+  if (allowedDirection === 'increase') return percent > 0;
+  if (allowedDirection === 'decrease') return percent < 0;
+  return false;
+}
+
+function buildDirectionLimitedReason(step, directionLimit) {
+  if (directionLimit.allowedDirection === 'hold') {
+    return `${directionLimit.riskReason || step.reason} Keep this parameter unchanged until stronger evidence is available.`;
+  }
+  if (step.percent > 0) {
+    return `${directionLimit.riskReason || step.reason} Automatic gain increases are not allowed in this risk state.`;
+  }
+  return `${directionLimit.riskReason || step.reason} Automatic gain decreases are not allowed in this risk state.`;
+}
+
+function resolveRiskPhenomenon(stepPhenomenon, tuningSafety) {
+  if (stepPhenomenon && stepPhenomenon !== 'none') {
+    return stepPhenomenon;
+  }
+  if (
+    tuningSafety?.pidRecommendationPolicy === 'risk_limited' &&
+    tuningSafety.vibrationCategory &&
+    tuningSafety.vibrationCategory !== 'none'
+  ) {
+    return tuningSafety.vibrationCategory;
+  }
+  return stepPhenomenon;
+}
+
+function isDiagnosticOnlyControlOscillation(tuningSafety) {
+  return (
+    tuningSafety?.pidRecommendationPolicy === 'diagnostic_only' &&
+    tuningSafety.vibrationCategory === 'control_oscillation'
+  );
+}
+
+function isDiagnosticOnlyControlOscillationBlocker(blocker) {
+  return /severe (control )?oscillation|severe vibration/i.test(String(blocker || ''));
+}
+
 function chooseParameterStep({
   loopName,
   axisLabel,
@@ -659,6 +769,66 @@ function chooseParameterStep({
   const evidence = buildMetricEvidence(metricSummary);
   const primaryPhenomenon = getPrimaryPhenomenon(metricSummary);
   const tuningSafety = groupContext?.tuningSafety || {};
+  const riskLimit = getRiskLimitedDirection({
+    loopName,
+    axisLabel,
+    gain,
+    primaryPhenomenon,
+    tuningSafety,
+  });
+
+  if (isDiagnosticOnlyControlOscillation(tuningSafety)) {
+    const manualEvidence = uniqueStrings([...(tuningSafety.evidence || []), ...evidence]);
+    const riskReason =
+      'Severe control oscillation is present; this value is for manual review only.';
+    const nextAction =
+      'Manual review is required before applying this diagnostic-only candidate.';
+    if (loopName === 'rate' && gain === 'P') {
+      return {
+        status: 'manual_candidate',
+        percent: -WEAK_TUNING_STEP_PERCENT,
+        phenomenon: 'control_oscillation',
+        confidence: 'medium',
+        reason:
+          'Severe control oscillation requires manual review; candidate reduces RATE_P conservatively.',
+        evidence: manualEvidence,
+        recommendationLevel: 'manual_review',
+        nextAction,
+        allowedDirection: 'decrease',
+        stepLimitPercent: WEAK_TUNING_STEP_PERCENT,
+        riskReason,
+      };
+    }
+    if (loopName === 'rate' && gain === 'D' && hasHighNoiseEvidence(metricSummary)) {
+      return {
+        status: 'manual_candidate',
+        percent: -WEAK_TUNING_STEP_PERCENT,
+        phenomenon: 'control_oscillation',
+        confidence: 'medium',
+        reason:
+          'Severe control oscillation has high-frequency noise evidence; candidate reduces RATE_D conservatively.',
+        evidence: manualEvidence,
+        recommendationLevel: 'manual_review',
+        nextAction,
+        allowedDirection: 'decrease',
+        stepLimitPercent: WEAK_TUNING_STEP_PERCENT,
+        riskReason,
+      };
+    }
+    return {
+      percent: 0,
+      phenomenon: 'control_oscillation',
+      confidence: 'high',
+      reason:
+        'Severe control oscillation is present; keep this parameter unchanged for manual review.',
+      evidence: manualEvidence,
+      recommendationLevel: 'unchanged',
+      nextAction: 'Keep the current value while severe control oscillation is reviewed.',
+      allowedDirection: 'hold',
+      stepLimitPercent: 0,
+      riskReason,
+    };
+  }
 
   if (
     tuningSafety.pidRecommendationPolicy === 'blocked' ||
@@ -687,6 +857,9 @@ function chooseParameterStep({
           ? 'Mechanical or IMU noise is present without control-oscillation evidence; PID recommendations are blocked.'
           : 'Severe vibration or severe oscillation is present; PID recommendations are blocked.',
       evidence: uniqueStrings([...(tuningSafety.evidence || []), ...evidence]),
+      allowedDirection: 'hold',
+      stepLimitPercent: 0,
+      riskReason: getRiskLimitedReason(tuningSafety),
     };
   }
 
@@ -696,12 +869,16 @@ function chooseParameterStep({
   ) {
     if (gain === 'D') {
       return {
-        percent: -DEFAULT_TUNING_STEP_PERCENT,
+        percent: -WEAK_TUNING_STEP_PERCENT,
         phenomenon: 'd_term_noise',
         confidence: 'medium',
         reason:
           'D-term or actuator high-frequency noise is present; reduce RATE_D conservatively.',
         evidence: uniqueStrings([...(tuningSafety.evidence || []), ...evidence]),
+        recommendationLevel: 'risk_limited',
+        allowedDirection: riskLimit.allowedDirection,
+        stepLimitPercent: riskLimit.stepLimitPercent,
+        riskReason: riskLimit.riskReason,
       };
     }
     return {
@@ -711,6 +888,31 @@ function chooseParameterStep({
       reason:
         'D-term or actuator high-frequency noise is present; do not adjust this gain first.',
       evidence: uniqueStrings([...(tuningSafety.evidence || []), ...evidence]),
+      allowedDirection: riskLimit.allowedDirection,
+      stepLimitPercent: riskLimit.stepLimitPercent,
+      riskReason: riskLimit.riskReason,
+    };
+  }
+
+  if (
+    loopName === 'rate' &&
+    gain === 'D' &&
+    axisLabel !== 'yaw' &&
+    tuningSafety.pidRecommendationPolicy === 'risk_limited' &&
+    tuningSafety.vibrationCategory === 'mechanical_imu_noise' &&
+    primaryPhenomenon === 'none'
+  ) {
+    return {
+      percent: -WEAK_TUNING_STEP_PERCENT,
+      phenomenon: 'mechanical_imu_noise',
+      confidence: 'medium',
+      reason:
+        'Mechanical or IMU high-frequency noise is present without control oscillation; reduce RATE_D with a small step.',
+      evidence: uniqueStrings([...(tuningSafety.evidence || []), ...evidence]),
+      recommendationLevel: 'risk_limited',
+      allowedDirection: riskLimit.allowedDirection,
+      stepLimitPercent: riskLimit.stepLimitPercent,
+      riskReason: riskLimit.riskReason,
     };
   }
 
@@ -726,6 +928,8 @@ function chooseParameterStep({
       reason:
         'Severe vibration or severe oscillation is present; PID recommendations are blocked.',
       evidence,
+      allowedDirection: 'hold',
+      stepLimitPercent: 0,
     };
   }
 
@@ -978,6 +1182,16 @@ function buildParameterTarget({
   blockers,
   groupContext,
 }) {
+  const tuningSafety = groupContext?.tuningSafety || {};
+  const primaryPhenomenon = getPrimaryPhenomenon(metricSummary);
+  const directionLimit = getRiskLimitedDirection({
+    loopName,
+    axisLabel,
+    gain,
+    primaryPhenomenon,
+    tuningSafety,
+  });
+
   if (blockers.length) {
     const reason = blockers[0];
     const blockerMetadata = getTargetBlockerMetadata(reason);
@@ -992,6 +1206,9 @@ function buildParameterTarget({
       evidence: buildMetricEvidence(metricSummary),
       recommendationLevel: 'deferred',
       nextAction: blockerMetadata.nextAction,
+      allowedDirection: 'hold',
+      stepLimitPercent: 0,
+      riskReason: null,
     };
   }
 
@@ -1007,6 +1224,9 @@ function buildParameterTarget({
       evidence: buildMetricEvidence(metricSummary),
       recommendationLevel: 'deferred',
       nextAction: getDeferredNextAction('Current parameter value was not found in the log.'),
+      allowedDirection: 'hold',
+      stepLimitPercent: 0,
+      riskReason: null,
     };
   }
 
@@ -1022,6 +1242,9 @@ function buildParameterTarget({
       evidence: buildMetricEvidence(metricSummary),
       recommendationLevel: 'deferred',
       nextAction: getDeferredNextAction('Fill min, max, and max step percent to generate a target value.'),
+      allowedDirection: 'hold',
+      stepLimitPercent: 0,
+      riskReason: null,
     };
   }
 
@@ -1037,6 +1260,9 @@ function buildParameterTarget({
       evidence: buildMetricEvidence(metricSummary),
       recommendationLevel: 'deferred',
       nextAction: getDeferredNextAction('Safety bounds are invalid.'),
+      allowedDirection: 'hold',
+      stepLimitPercent: 0,
+      riskReason: null,
     };
   }
 
@@ -1055,48 +1281,60 @@ function buildParameterTarget({
       changePercent: null,
       reason: step.reason,
       blockers: [step.reason],
-      phenomenon: step.phenomenon,
+      phenomenon: resolveRiskPhenomenon(step.phenomenon, tuningSafety),
       confidence: step.confidence,
       evidence: step.evidence,
       recommendationLevel: step.recommendationLevel || 'deferred',
       nextAction: step.nextAction || getDeferredNextAction(step.reason),
+      allowedDirection: step.allowedDirection || 'hold',
+      stepLimitPercent: step.stepLimitPercent ?? 0,
+      riskReason: step.riskReason || null,
     };
   }
 
+  const effectiveDirection = {
+    allowedDirection: step.allowedDirection || directionLimit.allowedDirection,
+    stepLimitPercent: step.stepLimitPercent ?? directionLimit.stepLimitPercent,
+    riskReason: step.riskReason || directionLimit.riskReason,
+  };
+
   if (step.percent > 0 && actuatorSaturation.level !== 'none') {
     return {
-      status: 'blocked',
-      targetValue: null,
-      changePercent: null,
+      status: 'unchanged',
+      targetValue: roundMetric(current.value, 12),
+      changePercent: 0,
       reason: 'Actuator saturation is high, so gain increases are blocked.',
       blockers: ['Actuator saturation is high, so gain increases are blocked.'],
       phenomenon: 'actuator_saturation',
       confidence: 'high',
       evidence: step.evidence,
-      recommendationLevel: 'deferred',
+      recommendationLevel: 'unchanged',
       nextAction: getDeferredNextAction('Actuator saturation is high, so gain increases are blocked.'),
+      allowedDirection: 'decrease',
+      stepLimitPercent: WEAK_TUNING_STEP_PERCENT,
+      riskReason: 'Actuator saturation is high; gain increases are not allowed.',
     };
   }
 
-  if (
-    step.percent > 0 &&
-    groupContext?.tuningSafety?.pidRecommendationPolicy === 'decrease_only'
-  ) {
+  if (!allowsDirection(effectiveDirection.allowedDirection, step.percent)) {
+    const reason = buildDirectionLimitedReason(step, effectiveDirection);
     return {
-      status: 'blocked',
-      targetValue: null,
-      changePercent: null,
-      reason: 'Moderate vibration is present, so gain increases are blocked.',
-      blockers: ['Moderate vibration is present, so gain increases are blocked.'],
-      phenomenon: groupContext.tuningSafety.vibrationCategory || 'mechanical_imu_noise',
-      confidence: 'high',
+      status: 'unchanged',
+      targetValue: roundMetric(current.value, 12),
+      changePercent: 0,
+      reason,
+      blockers: [],
+      phenomenon: resolveRiskPhenomenon(step.phenomenon, tuningSafety),
+      confidence: step.confidence,
       evidence: uniqueStrings([
-        ...(groupContext.tuningSafety.evidence || []),
+        ...(tuningSafety.evidence || []),
         ...(step.evidence || []),
       ]),
-      recommendationLevel: 'deferred',
-      nextAction:
-        'Resolve vibration evidence before increasing PID gains; only conservative decreases are allowed.',
+      recommendationLevel: 'unchanged',
+      nextAction: 'Keep the current value while this risk condition is present.',
+      allowedDirection: effectiveDirection.allowedDirection,
+      stepLimitPercent: effectiveDirection.stepLimitPercent,
+      riskReason: effectiveDirection.riskReason,
     };
   }
 
@@ -1107,21 +1345,26 @@ function buildParameterTarget({
       changePercent: 0,
       reason: step.reason,
       blockers: step.blocker ? [step.blocker] : [],
-      phenomenon: step.phenomenon,
+      phenomenon: resolveRiskPhenomenon(step.phenomenon, tuningSafety),
       confidence: step.confidence,
       evidence: step.evidence,
       recommendationLevel: 'unchanged',
       nextAction: 'Keep the current value unless follow-up analysis shows stronger evidence.',
+      allowedDirection: effectiveDirection.allowedDirection,
+      stepLimitPercent: effectiveDirection.stepLimitPercent,
+      riskReason: effectiveDirection.riskReason,
     };
   }
 
+  const limitedPercent =
+    tuningSafety.pidRecommendationPolicy === 'risk_limited'
+      ? Math.sign(step.percent) *
+        Math.min(Math.abs(step.percent), effectiveDirection.stepLimitPercent)
+      : step.percent;
   const boundedStep = applyBoundedStep(
     current.value,
     boundResult.value,
-    groupContext?.tuningSafety?.pidRecommendationPolicy === 'weak_only'
-      ? Math.sign(step.percent) *
-          Math.min(Math.abs(step.percent), WEAK_TUNING_STEP_PERCENT)
-      : step.percent,
+    limitedPercent,
   );
   if (!boundedStep) {
     return {
@@ -1135,11 +1378,14 @@ function buildParameterTarget({
       evidence: step.evidence,
       recommendationLevel: 'unchanged',
       nextAction: 'Keep the current value or relax safety bounds after manual review.',
+      allowedDirection: effectiveDirection.allowedDirection,
+      stepLimitPercent: effectiveDirection.stepLimitPercent,
+      riskReason: effectiveDirection.riskReason,
     };
   }
 
   return {
-    status: 'target_generated',
+    status: step.status === 'manual_candidate' ? 'manual_candidate' : 'target_generated',
     targetValue: roundMetric(boundedStep.target, 12),
     changePercent: roundMetric(boundedStep.changePercent, 6),
     reason: step.reason,
@@ -1147,8 +1393,15 @@ function buildParameterTarget({
     phenomenon: step.phenomenon,
     confidence: step.confidence,
     evidence: step.evidence,
-    recommendationLevel: step.recommendationLevel || 'actionable',
+    recommendationLevel:
+      step.recommendationLevel ||
+      (tuningSafety.pidRecommendationPolicy === 'risk_limited'
+        ? 'risk_limited'
+        : 'actionable'),
     nextAction: step.nextAction || 'Review the generated target before applying it.',
+    allowedDirection: effectiveDirection.allowedDirection,
+    stepLimitPercent: effectiveDirection.stepLimitPercent,
+    riskReason: effectiveDirection.riskReason,
   };
 }
 
@@ -1897,25 +2150,9 @@ function computeTuningSafety({ topicCharts, loops, estimatorQuality, segment }) 
     return {
       vibrationLevel: 'moderate',
       vibrationCategory: 'd_term_noise',
-      pidRecommendationPolicy: 'decrease_only',
+      pidRecommendationPolicy: 'risk_limited',
       evidence: uniqueStrings([
         'rate feedback noise and actuator high-frequency output are elevated',
-        ...evidence,
-      ]),
-    };
-  }
-
-  if (
-    sensorNoise.sampleCount > 0 &&
-    sensorNoise.maxDiffStd >= SENSOR_SEVERE_DIFF_STD &&
-    !actuatorHighFrequency
-  ) {
-    return {
-      vibrationLevel: 'severe',
-      vibrationCategory: 'mechanical_imu_noise',
-      pidRecommendationPolicy: 'diagnostic_only',
-      evidence: uniqueStrings([
-        'sensor gyro/accel high-frequency noise is elevated without matching actuator evidence',
         ...evidence,
       ]),
     };
@@ -1933,11 +2170,27 @@ function computeTuningSafety({ topicCharts, loops, estimatorQuality, segment }) 
     };
   }
 
+  if (
+    sensorNoise.sampleCount > 0 &&
+    sensorNoise.maxDiffStd >= SENSOR_SEVERE_DIFF_STD &&
+    !actuatorHighFrequency
+  ) {
+    return {
+      vibrationLevel: 'severe',
+      vibrationCategory: 'mechanical_imu_noise',
+      pidRecommendationPolicy: 'risk_limited',
+      evidence: uniqueStrings([
+        'sensor gyro/accel high-frequency noise is severe without matching actuator evidence',
+        ...evidence,
+      ]),
+    };
+  }
+
   if (sensorNoise.sampleCount > 0 && sensorNoise.maxDiffStd >= SENSOR_SEVERE_DIFF_STD) {
     return {
       vibrationLevel: 'severe',
       vibrationCategory: 'mechanical_imu_noise',
-      pidRecommendationPolicy: 'diagnostic_only',
+      pidRecommendationPolicy: 'risk_limited',
       evidence: uniqueStrings([
         'sensor gyro/accel high-frequency noise is severe',
         ...evidence,
@@ -1949,7 +2202,7 @@ function computeTuningSafety({ topicCharts, loops, estimatorQuality, segment }) 
     return {
       vibrationLevel: 'moderate',
       vibrationCategory: 'control_oscillation',
-      pidRecommendationPolicy: 'decrease_only',
+      pidRecommendationPolicy: 'risk_limited',
       evidence: uniqueStrings([
         'rate error zero-crossing evidence is high',
         ...evidence,
@@ -1958,12 +2211,16 @@ function computeTuningSafety({ topicCharts, loops, estimatorQuality, segment }) 
   }
 
   if (sensorNoise.sampleCount > 0 && sensorNoise.maxDiffStd >= SENSOR_MILD_DIFF_STD) {
+    const vibrationLevel =
+      sensorNoise.maxDiffStd >= SENSOR_MODERATE_DIFF_STD ? 'moderate' : 'mild';
     return {
-      vibrationLevel: 'mild',
+      vibrationLevel,
       vibrationCategory: 'mechanical_imu_noise',
-      pidRecommendationPolicy: 'weak_only',
+      pidRecommendationPolicy: 'risk_limited',
       evidence: uniqueStrings([
-        'sensor gyro/accel high-frequency noise is mildly elevated',
+        vibrationLevel === 'moderate'
+          ? 'sensor gyro/accel high-frequency noise is moderately elevated'
+          : 'sensor gyro/accel high-frequency noise is mildly elevated',
         ...evidence,
       ]),
     };
@@ -2038,10 +2295,10 @@ function getLoopMetricSummaries(loopName, loop) {
   );
 }
 
-function hasLoopPhenomenonForDownstream(metricSummary) {
+function hasBlockingLoopPhenomenonForDownstream(metricSummary) {
   if (metricSummary.status !== 'available') return true;
   if (getMetricGateBlockers('loop', 'readiness', metricSummary).length) return true;
-  return getPrimaryPhenomenon(metricSummary) !== 'none';
+  return getPrimaryPhenomenon(metricSummary) === 'severe_oscillation';
 }
 
 function assessLoopReadiness(loopName, loop) {
@@ -2055,7 +2312,7 @@ function assessLoopReadiness(loopName, loop) {
     };
   }
   const summaries = getLoopMetricSummaries(loopName, loop);
-  if (!summaries.length || summaries.some(hasLoopPhenomenonForDownstream)) {
+  if (!summaries.length || summaries.some(hasBlockingLoopPhenomenonForDownstream)) {
     return {
       healthy: false,
       reason: `${loopName} loop is not healthy enough for downstream tuning.`,
@@ -2153,6 +2410,11 @@ function buildLoopParameterTuning({
   const parameters = [];
   const displayParameters = [];
   const loopBlockers = new Set([...globalBlockers, ...upstreamBlockers]);
+  const parameterGlobalBlockers = isDiagnosticOnlyControlOscillation(tuningSafety)
+    ? globalBlockers.filter(
+        (blocker) => !isDiagnosticOnlyControlOscillationBlocker(blocker),
+      )
+    : globalBlockers;
 
   if (actuatorSaturation.level === 'severe') {
     loopBlockers.add(
@@ -2196,7 +2458,7 @@ function buildLoopParameterTuning({
         ? parseParameterBound(parameterBounds, item.parameter)
         : { status: 'not_applicable', value: null };
       const parameterBlockers = [
-        ...globalBlockers,
+        ...parameterGlobalBlockers,
         ...upstreamBlockers,
         ...(actuatorSaturation.level === 'severe'
           ? [
@@ -2258,7 +2520,6 @@ function buildLoopParameterTuning({
       }
       const shouldInclude =
         contextualTarget.status === 'target_generated' &&
-        contextualTarget.recommendationLevel === 'actionable' &&
         isFiniteNumber(currentValue) &&
         isFiniteNumber(contextualTarget.targetValue) &&
         Math.abs(contextualTarget.targetValue - currentValue) > EPS;
@@ -2300,7 +2561,7 @@ function buildParameterTuning({
       );
     } else {
       globalBlockers.push(
-        'Severe vibration or severe oscillation is present; PID recommendations are blocked.',
+        'Severe control oscillation is present; executable PID recommendations are blocked.',
       );
     }
   }

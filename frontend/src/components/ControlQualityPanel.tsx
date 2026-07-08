@@ -377,7 +377,7 @@ function getTuningDisplayParameters(
 
 function formatRecommendationTarget(item: ControlQualityParameterTuningItem) {
   if (
-    item.status === 'target_generated' &&
+    (item.status === 'target_generated' || item.status === 'manual_candidate') &&
     typeof item.targetValue === 'number' &&
     Number.isFinite(item.targetValue)
   ) {
@@ -387,24 +387,6 @@ function formatRecommendationTarget(item: ControlQualityParameterTuningItem) {
     return '保持当前值'
   }
   return '暂不推荐'
-}
-
-function formatRecommendationLevel(item: ControlQualityParameterTuningItem) {
-  if (
-    item.phenomenon === 'severe_vibration' ||
-    item.phenomenon === 'mechanical_imu_noise' ||
-    item.phenomenon === 'estimator_anomaly'
-  ) {
-    return '诊断优先'
-  }
-  if (item.phenomenon === 'd_term_noise') return '仅保守降低'
-  if (item.recommendationLevel === 'risk_limited') return '人工复核'
-  if (item.recommendationLevel === 'deferred') return '等待处理'
-  if (item.recommendationLevel === 'unchanged' || item.status === 'unchanged') {
-    return '保持当前'
-  }
-  if (item.status === 'target_generated') return '可推荐'
-  return '等待处理'
 }
 
 function formatReferenceLoopName(loopName: string) {
@@ -590,9 +572,16 @@ function formatParameterReason(item: ControlQualityParameterTuningItem) {
   const reasons = rawReasons.length ? rawReasons : ['']
   const upstreamReference = formatUpstreamReference(item.upstreamReference)
   const nextAction = item.nextAction ? formatNextAction(item.nextAction) : ''
+  const riskReason = item.riskReason ? formatTuningReason(item.riskReason, item.status) : ''
+  const stepReason =
+    typeof item.stepLimitPercent === 'number' && Number.isFinite(item.stepLimitPercent)
+      ? `本次最大步长限制为 ${formatParameterValue(item.stepLimitPercent)}%。`
+      : ''
   return Array.from(
     new Set([
       ...reasons.map((reason) => formatTuningReason(reason, item.status)),
+      riskReason,
+      stepReason,
       upstreamReference,
       nextAction,
     ].filter(Boolean)),
@@ -832,10 +821,16 @@ type TooltipPosition = {
 const PARAMETER_TOOLTIP_MARGIN = 12
 const PARAMETER_TOOLTIP_MAX_WIDTH = 360
 
-function ParameterDescriptionTooltip({
+function InlineTooltip({
   description,
+  ariaLabel,
+  className = 'control-parameter-tooltip-trigger',
+  triggerLabel = '!',
 }: {
   description: string
+  ariaLabel: string
+  className?: string
+  triggerLabel?: string
 }) {
   const tooltipId = useId()
   const triggerRef = useRef<HTMLButtonElement | null>(null)
@@ -920,8 +915,8 @@ function ParameterDescriptionTooltip({
       <button
         ref={triggerRef}
         type="button"
-        className="control-parameter-tooltip-trigger"
-        aria-label={`查看 PID 参数说明：${description}`}
+        className={className}
+        aria-label={ariaLabel}
         aria-describedby={tooltipId}
         aria-expanded={position ? true : false}
         onBlur={hideTooltip}
@@ -929,7 +924,7 @@ function ParameterDescriptionTooltip({
         onMouseEnter={showTooltip}
         onMouseLeave={hideTooltip}
       >
-        !
+        {triggerLabel}
       </button>
       {position && typeof document !== 'undefined'
         ? createPortal(
@@ -949,13 +944,41 @@ function ParameterDescriptionTooltip({
   )
 }
 
+function ParameterDescriptionTooltip({
+  description,
+}: {
+  description: string
+}) {
+  return (
+    <InlineTooltip
+      description={description}
+      ariaLabel={`查看 PID 参数说明：${description}`}
+    />
+  )
+}
+
+function ParameterReasonTooltip({ reason }: { reason: string }) {
+  return (
+    <InlineTooltip
+      description={reason}
+      ariaLabel={`查看 PID 推荐说明：${reason}`}
+      className="control-parameter-tooltip-trigger control-parameter-reason-tooltip-trigger"
+      triggerLabel="i"
+    />
+  )
+}
+
 function ParameterTuningSection({
   tuning,
 }: {
   tuning?: ControlQualityLoopParameterTuning
 }) {
   const blockers = tuning?.blockers?.filter(Boolean) ?? []
+  const blockerSummary = blockers.length
+    ? blockers.map((blocker) => formatTuningReason(blocker, 'blocked')).join('；')
+    : ''
   const parameters = getTuningDisplayParameters(tuning)
+  const hasAnyParameters = parameters.length > 0
 
   if (!tuning) {
     return (
@@ -968,7 +991,7 @@ function ParameterTuningSection({
     )
   }
 
-  if (parameters.length === 0) {
+  if (!hasAnyParameters) {
     return (
       <div className="control-parameter-panel">
         <h5 className="tuning-subtitle">PID 推荐参数</h5>
@@ -988,14 +1011,22 @@ function ParameterTuningSection({
   return (
     <div className="control-parameter-panel">
       <h5 className="tuning-subtitle">PID 推荐参数</h5>
+      {blockerSummary ? (
+        <div
+          className="tuning-alert tuning-alert-muted control-parameter-blocker-summary"
+          role="note"
+        >
+          <strong>诊断阻断/限制原因：</strong>
+          <span>{blockerSummary}</span>
+        </div>
+      ) : null}
       <div className="control-parameter-table-wrap">
-        <table className="control-quality-table control-parameter-table">
+        <table className="control-quality-table control-parameter-table control-parameter-unified-table">
           <thead>
             <tr>
               <th>参数</th>
               <th>当前值</th>
-              <th>推荐值</th>
-              <th>风险级别</th>
+              <th>推荐/候选值</th>
               <th>说明</th>
             </tr>
           </thead>
@@ -1016,17 +1047,8 @@ function ParameterTuningSection({
                     {formatRecommendationTarget(item)}
                   </span>
                 </td>
-                <td>
-                  <span
-                    className={`control-parameter-level control-parameter-level-${
-                      item.recommendationLevel || item.status
-                    }`}
-                  >
-                    {formatRecommendationLevel(item)}
-                  </span>
-                </td>
                 <td className="control-parameter-reason">
-                  {formatParameterReason(item)}
+                  <ParameterReasonTooltip reason={formatParameterReason(item)} />
                 </td>
               </tr>
             ))}

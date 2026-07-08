@@ -97,6 +97,42 @@ const STANDARD_SIGNAL_SPECS = [
     ],
   },
   {
+    id: 'vehicle.localPositionValid',
+    required: false,
+    candidates: [
+      {
+        topic: 'vehicle_local_position',
+        field: 'xy_valid',
+        unit: '',
+        transform: (value) => (Number(value) > 0.5 ? 1 : 0),
+      },
+      {
+        topic: 'vehicle_local_position',
+        field: 'v_xy_valid',
+        unit: '',
+        transform: (value) => (Number(value) > 0.5 ? 1 : 0),
+      },
+    ],
+  },
+  {
+    id: 'vehicle.globalPositionValid',
+    required: false,
+    candidates: [
+      {
+        topic: 'vehicle_local_position',
+        field: 'xy_global',
+        unit: '',
+        transform: (value) => (Number(value) > 0.5 ? 1 : 0),
+      },
+      {
+        topic: 'vehicle_global_position',
+        field: 'lat_lon_valid',
+        unit: '',
+        transform: (value) => (Number(value) > 0.5 ? 1 : 0),
+      },
+    ],
+  },
+  {
     id: 'vehicle.navState',
     required: true,
     candidates: [
@@ -611,6 +647,97 @@ const STANDARD_SIGNAL_SPECS = [
         field: 'z',
         unit: 'm',
         transform: (value) => -Number(value),
+      },
+    ],
+  },
+  {
+    id: 'position.verticalVelocity',
+    required: false,
+    candidates: [
+      {
+        topic: 'vehicle_local_position',
+        field: 'vz',
+        unit: 'm/s',
+      },
+      {
+        topic: 'vehicle_global_position',
+        field: 'vel_d',
+        unit: 'm/s',
+      },
+    ],
+  },
+  {
+    id: 'gps.fixType',
+    required: false,
+    candidates: [
+      {
+        topic: 'vehicle_gps_position',
+        field: 'fix_type',
+        unit: '',
+      },
+    ],
+  },
+  {
+    id: 'gps.satellitesUsed',
+    required: false,
+    candidates: [
+      {
+        topic: 'vehicle_gps_position',
+        field: 'satellites_used',
+        unit: '',
+      },
+    ],
+  },
+  {
+    id: 'gps.eph',
+    required: false,
+    candidates: [
+      {
+        topic: 'vehicle_gps_position',
+        field: 'eph',
+        unit: 'm',
+      },
+      {
+        topic: 'vehicle_global_position',
+        field: 'eph',
+        unit: 'm',
+      },
+    ],
+  },
+  {
+    id: 'gps.epv',
+    required: false,
+    candidates: [
+      {
+        topic: 'vehicle_gps_position',
+        field: 'epv',
+        unit: 'm',
+      },
+      {
+        topic: 'vehicle_global_position',
+        field: 'epv',
+        unit: 'm',
+      },
+    ],
+  },
+  {
+    id: 'estimator.innovationTestRatio',
+    required: false,
+    candidates: [
+      {
+        topic: 'estimator_innovation_test_ratios',
+        field: 'vel_pos',
+        unit: '',
+      },
+      {
+        topic: 'estimator_innovation_test_ratios',
+        field: 'hvel',
+        unit: '',
+      },
+      {
+        topic: 'estimator_innovations',
+        field: 'vel_pos_test_ratio',
+        unit: '',
       },
     ],
   },

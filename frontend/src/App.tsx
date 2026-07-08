@@ -1,34 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import './App.css'
-import AdvancedRawDataPanel from './components/AdvancedRawDataPanel'
 import BatchLogUpload from './components/BatchLogUpload'
-import ChartPanel from './components/ChartPanel'
 import ControlQualityPanel from './components/ControlQualityPanel'
-import IncidentAnalysisPanel from './components/IncidentAnalysisPanel'
+import FlightSummaryPage from './components/FlightSummaryPage'
 import type {
-  ActiveLogMeta,
   ChartSelectionPreview,
-  ChartSeries,
   ChartTimeRange,
-  DiagnosticItem,
-  ModeSegment,
-  TopicChart,
 } from './components/ChartPanel'
-import LogSelector from './components/LogSelector'
-import UploadPanel from './components/UploadPanel'
 import {
   batchCalculateControlQuality,
   calculateControlQuality,
-  fetchChartData,
-  fetchLogList,
-  runIncidentAnalysis,
-  uploadLogFile,
 } from './services/api'
 import type {
   ControlQualityParameterBound,
   ControlQualityReport,
-  IncidentAnalysisResponse,
 } from './types/log'
 import {
   buildControlQualitySegment,
@@ -87,8 +73,7 @@ type ControlQualityVisibleRange = {
   endS: number
 }
 
-type ViewMode = 'home' | 'log-analysis' | 'batch' | 'control-analysis'
-type LogAnalysisStep = 'upload' | 'chart'
+type ViewMode = 'home' | 'flight-summary' | 'batch' | 'control-analysis'
 
 type ControlAnalysisReportItem = {
   clientId: string
@@ -99,7 +84,6 @@ type ControlAnalysisReportItem = {
   errorText: string
 }
 
-const PAGE_SIZE = 8
 const TIMELINE_PLAYBACK_SPEED = 1
 const TIMELINE_FINE_STEP_MIN_S = 0.05
 const TIMELINE_FINE_STEP_MAX_S = 1
@@ -109,10 +93,6 @@ const CHART_SELECTION_MIN_VISUAL_PX = 1
 
 function getFileSelectionKey(file: File) {
   return `${file.name}-${file.size}-${file.lastModified}`
-}
-
-function isUlgFile(file: File) {
-  return file.name.toLowerCase().endsWith('.ulg')
 }
 
 function clampPercent(value: number) {
@@ -175,35 +155,9 @@ function App() {
   if (controlQualityRequestTrackerRef.current === null) {
     controlQualityRequestTrackerRef.current = createControlQualityRequestTracker()
   }
-  const [selectedFileName, setSelectedFileName] = useState('')
-  const [isUploading, setIsUploading] = useState(false)
-  const [selectedLogId, setSelectedLogId] = useState('')
-  const [statusText, setStatusText] = useState('')
-  const [chartHint, setChartHint] = useState(
-    '\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a',
-  )
-  const [seriesData, setSeriesData] = useState<ChartSeries[]>([])
-  const [topicCharts, setTopicCharts] = useState<TopicChart[]>([])
-  const [modeSegments, setModeSegments] = useState<ModeSegment[]>([])
-  const [diagnostics, setDiagnostics] = useState<DiagnosticItem[]>([])
-  const [incidentAnalysisReport, setIncidentAnalysisReport] =
-    useState<IncidentAnalysisResponse | null>(null)
-  const [isIncidentAnalysisLoading, setIsIncidentAnalysisLoading] =
-    useState(false)
-  const [incidentAnalysisError, setIncidentAnalysisError] = useState('')
-  const [logList, setLogList] = useState<
-    Array<{ logId: string; fileName: string; uploadedAt: string }>
-  >([])
-  const [activeLogMeta, setActiveLogMeta] = useState<ActiveLogMeta | null>(null)
-  const [searchKeyword, setSearchKeyword] = useState('')
-  const [listPage, setListPage] = useState(1)
-  const [listPageCount, setListPageCount] = useState(1)
-  const [listTotal, setListTotal] = useState(0)
   const [viewMode, setViewMode] = useState<ViewMode>('home')
-  const [logAnalysisStep, setLogAnalysisStep] =
-    useState<LogAnalysisStep>('upload')
-  const controlAnalysisFileInputRef = useRef<HTMLInputElement | null>(null)
-  const [controlAnalysisFiles, setControlAnalysisFiles] = useState<File[]>([])
+  const controlAnalysisEntryFileInputRef =
+    useRef<HTMLInputElement | null>(null)
   const [isControlAnalysisUploading, setIsControlAnalysisUploading] =
     useState(false)
   const [controlAnalysisStatusText, setControlAnalysisStatusText] = useState('')
@@ -248,127 +202,6 @@ function App() {
     controlAnalysisReportsRef.current = controlAnalysisReports
   }, [controlAnalysisReports])
 
-  const loadLogList = async (options?: {
-    preferLogId?: string
-    page?: number
-    keyword?: string
-  }) => {
-    const page = options?.page ?? listPage
-    const keyword = options?.keyword ?? searchKeyword
-
-    try {
-      const result = await fetchLogList({
-        q: keyword,
-        page,
-        pageSize: PAGE_SIZE,
-      })
-      const items = Array.isArray(result?.items) ? result.items : []
-      const pageCount =
-        typeof result?.pageCount === 'number' && result.pageCount > 0
-          ? result.pageCount
-          : 1
-      const currentPage =
-        typeof result?.page === 'number' && result.page > 0 ? result.page : 1
-      const total = typeof result?.total === 'number' ? result.total : items.length
-
-      setLogList(items)
-      setListPage(currentPage)
-      setListPageCount(pageCount)
-      setListTotal(total)
-
-      if (items.length === 0) {
-        setSelectedLogId('')
-        return
-      }
-
-      if (
-        options?.preferLogId &&
-        items.some((item: { logId: string }) => item.logId === options.preferLogId)
-      ) {
-        setSelectedLogId(options.preferLogId)
-        return
-      }
-
-      if (
-        !selectedLogId ||
-        !items.some((item: { logId: string }) => item.logId === selectedLogId)
-      ) {
-        setSelectedLogId(items[0].logId)
-      }
-    } catch {
-      setLogList([])
-    }
-  }
-
-  useEffect(() => {
-    queueMicrotask(() => {
-      void loadLogList({ page: 1, keyword: '' })
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const handleFileSelected = (fileName: string) => {
-    setSelectedFileName(fileName)
-    setStatusText('\u5df2\u9009\u62e9\u6587\u4ef6\uff0c\u8bf7\u70b9\u51fb\u4e0a\u4f20\u3002')
-  }
-
-  const handleUpload = async (file: File | null) => {
-    if (!file) {
-      setStatusText('\u8bf7\u5148\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6\u3002')
-      return
-    }
-
-    if (!isUlgFile(file)) {
-      setStatusText('\u529f\u80fd 1 \u9ed8\u8ba4\u4ec5\u652f\u6301\u4e0a\u4f20 .ulg \u683c\u5f0f\u7684\u65e5\u5fd7\u6587\u4ef6\u3002')
-      return
-    }
-
-    try {
-      setIsUploading(true)
-      setStatusText('\u6b63\u5728\u4e0a\u4f20...')
-      setSeriesData([])
-      setTopicCharts([])
-      setModeSegments([])
-      setDiagnostics([])
-      setIncidentAnalysisReport(null)
-      setIncidentAnalysisError('')
-      setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
-      setActiveLogMeta(null)
-      setSelectionBox(null)
-      const uploadResult = await uploadLogFile(file)
-      const logId =
-        uploadResult && typeof uploadResult.logId === 'string'
-          ? uploadResult.logId
-          : ''
-      if (logId) {
-        setSelectedLogId(logId)
-      }
-      await loadLogList({ preferLogId: logId, page: 1, keyword: '' })
-      setLogAnalysisStep('chart')
-      if (logId) {
-        await loadChartForLog(logId)
-        await loadIncidentAnalysisForLog(logId)
-      }
-      setStatusText(
-        logId
-          ? `\u4e0a\u4f20\u6210\u529f\uff08logId: ${logId}\uff09\uff0c\u5e38\u89c4\u5206\u6790\u5df2\u81ea\u52a8\u52a0\u8f7d\u3002`
-          : '\u4e0a\u4f20\u6210\u529f\u3002',
-      )
-    } catch {
-      setSeriesData([])
-      setTopicCharts([])
-      setModeSegments([])
-      setDiagnostics([])
-      setIncidentAnalysisReport(null)
-      setIncidentAnalysisError('')
-      setActiveLogMeta(null)
-      setSelectionBox(null)
-      setStatusText('\u4e0a\u4f20\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u540e\u7aef\u662f\u5426\u542f\u52a8\u3002')
-    } finally {
-      setIsUploading(false)
-    }
-  }
-
   const cleanupChartInteractions = useCallback(() => {
     chartCleanupRef.current.forEach((cleanup) => cleanup())
     chartCleanupRef.current.clear()
@@ -385,73 +218,50 @@ function App() {
     setViewMode('home')
   }
 
-  const handleBackToLogUpload = () => {
+  const handleEnterFlightSummary = () => {
     cleanupChartInteractions()
-    setLogAnalysisStep('upload')
-  }
-
-  const handleEnterLogAnalysis = () => {
-    setViewMode('log-analysis')
-    setLogAnalysisStep('upload')
+    setViewMode('flight-summary')
   }
 
   const handleEnterBatchAnalysis = () => {
     setViewMode('batch')
   }
 
-  const handleEnterControlAnalysis = () => {
-    setViewMode('control-analysis')
+  const resetControlAnalysisState = () => {
     controlAnalysisReportsRef.current.forEach((item) => {
       controlQualityRequestTrackerRef.current?.invalidate(item.clientId)
     })
     setControlAnalysisReports([])
     setControlQualityVisibleRanges({})
     setControlAnalysisStatusText('')
-    setControlAnalysisFiles([])
-    if (controlAnalysisFileInputRef.current) {
-      controlAnalysisFileInputRef.current.value = ''
+  }
+
+  const handleRequestControlAnalysisLogs = () => {
+    if (controlAnalysisEntryFileInputRef.current) {
+      controlAnalysisEntryFileInputRef.current.value = ''
     }
+    controlAnalysisEntryFileInputRef.current?.click()
   }
 
-  const handleChooseControlAnalysisFile = () => {
-    controlAnalysisFileInputRef.current?.click()
-  }
-
-  const handleControlAnalysisFileChange = (
+  const handleControlAnalysisEntryFileChange = (
     event: ChangeEvent<HTMLInputElement>,
   ) => {
     const files = Array.from(event.target.files ?? [])
-    if (files.length === 0) return
-    const nextFiles = [...controlAnalysisFiles]
-    const existingKeys = new Set(nextFiles.map(getFileSelectionKey))
-    for (const file of files) {
-      const key = getFileSelectionKey(file)
-      if (!existingKeys.has(key)) {
-        nextFiles.push(file)
-        existingKeys.add(key)
-      }
-    }
-    setControlAnalysisFiles(nextFiles)
-    setControlAnalysisStatusText(
-      `\u5df2\u9009\u62e9 ${nextFiles.length} \u4efd\u63a7\u5236\u73af\u8def\u5206\u6790\u65e5\u5fd7\uff0c\u8bf7\u70b9\u51fb\u4e0a\u4f20\u5e76\u5bf9\u6bd4\u65e5\u5fd7\u3002`,
-    )
     event.target.value = ''
+    if (files.length === 0) {
+      return
+    }
+
+    void handleStartControlAnalysisFromFiles(files)
   }
 
-  const handleUploadControlAnalysisLog = async () => {
-    const files =
-      controlAnalysisFiles.length > 0
-        ? controlAnalysisFiles
-        : Array.from(controlAnalysisFileInputRef.current?.files ?? [])
+  const handleStartControlAnalysisFromFiles = async (files: File[]) => {
     if (files.length === 0) {
-      setControlAnalysisStatusText(
-        '\u8bf7\u5148\u9009\u62e9\u7528\u4e8e\u63a7\u5236\u73af\u8def\u5206\u6790\u7684 .ulg \u65e5\u5fd7\uff0c\u53ef\u4ee5\u4e00\u6b21\u9009\u62e9\u591a\u4efd\u3002',
-      )
       return
     }
 
     const nextItems = files.map((file, index) => ({
-      clientId: `${file.name}-${file.size}-${file.lastModified}-${index}`,
+      clientId: `${getFileSelectionKey(file)}-${index}`,
       fileName: file.name,
       logId: '',
       report: null,
@@ -459,13 +269,13 @@ function App() {
       errorText: '',
     }))
     try {
+      cleanupChartInteractions()
+      resetControlAnalysisState()
+      setViewMode('control-analysis')
       setIsControlAnalysisUploading(true)
       setControlAnalysisStatusText(
-        `\u6b63\u5728\u4e00\u6b21\u6027\u4e0a\u4f20 ${files.length} \u4efd\u65e5\u5fd7\u5e76\u8ba1\u7b97\u63a7\u5236\u73af\u6307\u6807...`,
+        `\u6b63\u5728\u5206\u6790 ${files.length} \u4efd\u63a7\u5236\u73af\u8def\u65e5\u5fd7...`,
       )
-      controlAnalysisReportsRef.current.forEach((item) => {
-        controlQualityRequestTrackerRef.current?.invalidate(item.clientId)
-      })
       setControlAnalysisReports(nextItems)
       setControlQualityVisibleRanges({})
 
@@ -496,6 +306,14 @@ function App() {
         `\u63a7\u5236\u73af\u5206\u6790\u5b8c\u6210\uff1a${result.successCount} \u4efd\u6210\u529f\uff0c${result.failedCount} \u4efd\u5931\u8d25\u3002`,
       )
     } catch {
+      setControlAnalysisReports(
+        nextItems.map((item) => ({
+          ...item,
+          isLoading: false,
+          errorText:
+            '\u65e5\u5fd7\u4e0a\u4f20\u6216\u63a7\u5236\u73af\u5206\u6790\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u540e\u7aef\u548c .ulg \u6587\u4ef6\u3002',
+        })),
+      )
       setControlAnalysisStatusText(
         '\u65e5\u5fd7\u4e0a\u4f20\u6216\u63a7\u5236\u73af\u5206\u6790\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u540e\u7aef\u548c .ulg \u6587\u4ef6\u3002',
       )
@@ -562,105 +380,6 @@ function App() {
     }
   }, [])
 
-  const loadChartForLog = async (logId: string) => {
-    if (!logId) return
-
-    try {
-      const data = await fetchChartData(logId)
-      if (Array.isArray(data?.series) && data.series.length === 0) {
-        setSeriesData([])
-        setTopicCharts([])
-        setModeSegments([])
-        setChartHint(
-          `\u5df2\u8c03\u7528\u56fe\u8868\u63a5\u53e3\uff08logId: ${logId}\uff09\uff1a\u5f53\u524d\u8fd4\u56de\u7a7a\u6570\u636e\uff08\u5360\u4f4d\uff09`,
-        )
-        setSelectionBox(null)
-        return
-      }
-      const normalizedSeries = Array.isArray(data?.series) ? data.series : []
-      const normalizedTopicCharts = Array.isArray(data?.topicCharts)
-        ? data.topicCharts
-        : []
-      const normalizedModeSegments = Array.isArray(data?.modeSegments)
-        ? data.modeSegments
-        : []
-      const normalizedDiagnostics = Array.isArray(data?.diagnostics)
-        ? data.diagnostics
-        : []
-      setSeriesData(normalizedSeries)
-      setTopicCharts(normalizedTopicCharts)
-      setModeSegments(normalizedModeSegments)
-      setDiagnostics(normalizedDiagnostics)
-      setActiveLogMeta({
-        logId: typeof data?.logId === 'string' ? data.logId : logId,
-        fileName:
-          typeof data?.fileName === 'string'
-            ? data.fileName
-            : '\u672a\u77e5\u6587\u4ef6',
-        uploadedAt:
-          typeof data?.uploadedAt === 'string'
-            ? data.uploadedAt
-            : '',
-      })
-      setChartHint(
-        data?.dataSource === 'header-derived-simulated-series'
-          ? '\u5df2\u52a0\u8f7d\u56fe\u8868\u6570\u636e\uff08\u5f53\u524d\u4e3a\u57fa\u4e8e ULog \u5934\u90e8\u7279\u5f81\u7684\u6f14\u793a\u65f6\u5e8f\uff09'
-          : '\u5df2\u52a0\u8f7d\u56fe\u8868\u6570\u636e\uff08\u6765\u81ea PX4 \u4e3b\u9898\u89e3\u6790\uff09',
-      )
-    } catch {
-      setSeriesData([])
-      setTopicCharts([])
-      setModeSegments([])
-      setActiveLogMeta(null)
-      setSelectionBox(null)
-      void loadLogList({ preferLogId: '' })
-      setChartHint(
-        '\u56fe\u8868\u6570\u636e\u8bf7\u6c42\u5931\u8d25\uff08\u53ef\u80fd\u662f\u65e5\u5fd7\u5df2\u5931\u6548\uff0c\u8bf7\u5237\u65b0\u5217\u8868\u6216\u91cd\u65b0\u4e0a\u4f20\uff09',
-      )
-    }
-  }
-
-  const loadIncidentAnalysisForLog = async (logId: string) => {
-    if (!logId) return
-
-    try {
-      setIsIncidentAnalysisLoading(true)
-      setIncidentAnalysisError('')
-      const report = await runIncidentAnalysis(logId)
-      setIncidentAnalysisReport(report)
-    } catch {
-      setIncidentAnalysisReport(null)
-      setIncidentAnalysisError(
-        '\u65e5\u5fd7\u5206\u6790\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u5df2\u542f\u52a8\u4e14\u65e5\u5fd7\u4ecd\u5728\u5f53\u524d\u4f1a\u8bdd\u4e2d\u3002',
-      )
-    } finally {
-      setIsIncidentAnalysisLoading(false)
-    }
-  }
-
-  const handleRunIncidentAnalysis = async () => {
-    await loadIncidentAnalysisForLog(selectedLogId)
-  }
-
-  const handleLogSelect = async (logId: string) => {
-    cleanupChartInteractions()
-    setSelectedLogId(logId)
-    setSeriesData([])
-    setTopicCharts([])
-    setModeSegments([])
-    setDiagnostics([])
-    setIncidentAnalysisReport(null)
-    setIncidentAnalysisError('')
-    setActiveLogMeta(null)
-    setSelectionBox(null)
-    if (logId) {
-      await loadChartForLog(logId)
-      await loadIncidentAnalysisForLog(logId)
-    } else {
-      setChartHint('\u56fe\u8868\u7ec4\u4ef6\u5360\u4f4d\u533a')
-    }
-  }
-
   const handleApplyControlQualityRange = async (
     item: ControlAnalysisReportItem,
     startS: number | null,
@@ -724,27 +443,6 @@ function App() {
       controlSegment.segment,
     )
   }, [loadControlQualityForItem])
-
-  const handleSearch = async () => {
-    await loadLogList({ page: 1, keyword: searchKeyword })
-    setSeriesData([])
-    setTopicCharts([])
-    setDiagnostics([])
-    setIncidentAnalysisReport(null)
-    setIncidentAnalysisError('')
-    setActiveLogMeta(null)
-    setChartHint('\u65e5\u5fd7\u5217\u8868\u5df2\u66f4\u65b0\uff0c\u8bf7\u9009\u62e9\u65e5\u5fd7\u540e\u67e5\u770b\u56fe\u8868\u3002')
-  }
-
-  const handlePrevPage = async () => {
-    if (listPage <= 1) return
-    await loadLogList({ page: listPage - 1 })
-  }
-
-  const handleNextPage = async () => {
-    if (listPage >= listPageCount) return
-    await loadLogList({ page: listPage + 1 })
-  }
 
   const getUsableChartEntries = useCallback(() => {
     const entries: Array<[string, ChartRegistryItem]> = []
@@ -1571,18 +1269,24 @@ function App() {
       ? controlAnalysisReports.some((item) => item.errorText)
         ? '部分完成'
         : '分析完成'
-      : controlAnalysisFiles.length > 0
-        ? `已选择 ${controlAnalysisFiles.length} 份`
-        : '等待日志'
+      : '等待日志'
 
   return (
     <div className="app">
       <header className="header">
         <h1>{'\u98de\u884c\u65e5\u5fd7\u5206\u6790\u5e73\u53f0'}</h1>
         <p>
-          {'\u9009\u62e9\u529f\u80fd\u540e\u8fdb\u5165\u5bf9\u5e94\u6a21\u5757\uff1a\u5355\u65e5\u5fd7\u4e0a\u4f20\u5206\u6790\u3001\u6279\u91cf\u7b5b\u9009\u65e5\u5fd7\u3001\u63a7\u5236\u73af\u8def\u5206\u6790\u3002'}
+          {'选择功能后进入对应模块：飞行日志摘要、批量筛选日志、控制环路分析。'}
         </p>
       </header>
+      <input
+        ref={controlAnalysisEntryFileInputRef}
+        type="file"
+        className="hidden-input"
+        accept=".ulg"
+        multiple
+        onChange={handleControlAnalysisEntryFileChange}
+      />
 
       <main className="page">
         {viewMode === 'home' ? (
@@ -1592,11 +1296,11 @@ function App() {
               <button
                 type="button"
                 className="feature-card"
-                onClick={handleEnterLogAnalysis}
+                onClick={handleEnterFlightSummary}
               >
-                <h3>{'\u529f\u80fd 1\uff1a\u5e38\u89c4\u65e5\u5fd7\u5206\u6790'}</h3>
+                <h3>{'功能 1：飞行日志摘要'}</h3>
                 <p>
-                  {'\u4e0a\u4f20\u5355\u4efd .ulg \u65e5\u5fd7\uff0c\u67e5\u770b\u65e5\u5fd7\u6982\u89c8\u3001\u98de\u884c\u4e8b\u4ef6\u548c\u8bc1\u636e\u56fe\u8868\u3002'}
+                  {'上传单份 .ulg 日志，自动整理飞行阶段、飞行状态和简短报告。'}
                 </p>
               </button>
               <button
@@ -1612,7 +1316,7 @@ function App() {
               <button
                 type="button"
                 className="feature-card"
-                onClick={handleEnterControlAnalysis}
+                onClick={handleRequestControlAnalysisLogs}
               >
                 <h3>{'\u529f\u80fd 3\uff1a\u63a7\u5236\u73af\u8def\u5206\u6790'}</h3>
                 <p>
@@ -1623,110 +1327,24 @@ function App() {
           </section>
         ) : null}
 
-        {viewMode === 'log-analysis' && logAnalysisStep === 'upload' ? (
-          <>
-            <div className="page-title-row">
-              <span />
-              <button
-                type="button"
-                className="button"
-                onClick={handleBackToHome}
-              >
-                {'\u8fd4\u56de\u529f\u80fd\u5217\u8868'}
-              </button>
-            </div>
-            <UploadPanel
-              selectedFileName={selectedFileName}
-              isUploading={isUploading}
-              statusText={statusText}
-              onFileSelected={handleFileSelected}
-              onUpload={handleUpload}
-            />
-          </>
-        ) : null}
-
-        {viewMode === 'log-analysis' && logAnalysisStep === 'chart' ? (
-          <section className={`card ${selectedLogId ? '' : 'card-disabled'}`}>
-            <div className="page-title-row">
-              <h2>{'\u529f\u80fd 1\uff1a\u5e38\u89c4\u65e5\u5fd7\u5206\u6790'}</h2>
-              <div className="actions">
-                <button
-                  type="button"
-                  className={`button chart-sync-button${
-                    isGlobalChartSyncEnabled ? ' chart-sync-button-active' : ''
-                  }`}
-                  onClick={() =>
-                    setIsGlobalChartSyncEnabled((current) => !current)
-                  }
-                  aria-pressed={isGlobalChartSyncEnabled}
-                >
-                  {isGlobalChartSyncEnabled
-                    ? '\u5168\u5c40\u56fe\u8868\u8054\u52a8\uff1a\u5df2\u5f00\u542f'
-                    : '\u5f00\u542f\u5168\u5c40\u56fe\u8868\u8054\u52a8'}
-                </button>
-                <button
-                  type="button"
-                  className="button"
-                  onClick={handleBackToLogUpload}
-                >
-                  {'\u8fd4\u56de\u4e0a\u4f20\u65e5\u5fd7'}
-                </button>
-                <button
-                  type="button"
-                  className="button"
-                  onClick={handleBackToHome}
-                >
-                  {'\u8fd4\u56de\u529f\u80fd\u5217\u8868'}
-                </button>
-              </div>
-            </div>
-            <LogSelector
-              selectedLogId={selectedLogId}
-              searchKeyword={searchKeyword}
-              logList={logList}
-              listPage={listPage}
-              listPageCount={listPageCount}
-              listTotal={listTotal}
-              onSearchKeywordChange={setSearchKeyword}
-              onSearch={handleSearch}
-              onLogSelect={handleLogSelect}
-              onRefreshLogList={() => loadLogList({ preferLogId: selectedLogId })}
-              onPrevPage={handlePrevPage}
-              onNextPage={handleNextPage}
-            />
-            <IncidentAnalysisPanel
-              selectedLogId={selectedLogId}
-              report={incidentAnalysisReport}
-              isLoading={isIncidentAnalysisLoading}
-              errorText={incidentAnalysisError}
-              onRun={handleRunIncidentAnalysis}
-              modeSegments={modeSegments}
-              selectionBox={selectionBox}
-              onChartReady={bindChartInteractions}
-              onChartDispose={handleChartDispose}
-            />
-            <AdvancedRawDataPanel>
-              <ChartPanel
-                activeLogMeta={activeLogMeta}
-                topicCharts={topicCharts}
-                seriesData={seriesData}
-                modeSegments={modeSegments}
-                diagnostics={diagnostics}
-                selectionBox={selectionBox}
-                timelinePointer={timelinePointer}
-                isTimelinePlaying={isTimelinePlaying}
-                chartHint={chartHint}
-                showDefaultSeriesFallback
-                onChartReady={bindChartInteractions}
-                onChartDispose={handleChartDispose}
-                onTimelineSeek={(timeValue) => {
-                  setIsTimelinePlaying(false)
-                  setTimelineTime(timeValue)
-                }}
-                onToggleTimelinePlayback={toggleTimelinePlayback}
-              />
-            </AdvancedRawDataPanel>
-          </section>
+        {viewMode === 'flight-summary' ? (
+          <FlightSummaryPage
+            selectionBox={selectionBox}
+            timelinePointer={timelinePointer}
+            isTimelinePlaying={isTimelinePlaying}
+            isGlobalChartSyncEnabled={isGlobalChartSyncEnabled}
+            onToggleGlobalChartSync={() =>
+              setIsGlobalChartSyncEnabled((current) => !current)
+            }
+            onBackToHome={handleBackToHome}
+            onChartReady={bindChartInteractions}
+            onChartDispose={handleChartDispose}
+            onTimelineSeek={(timeValue) => {
+              setIsTimelinePlaying(false)
+              setTimelineTime(timeValue)
+            }}
+            onToggleTimelinePlayback={toggleTimelinePlayback}
+          />
         ) : null}
 
         {viewMode === 'batch' ? (
@@ -1746,7 +1364,7 @@ function App() {
         ) : null}
 
         {viewMode === 'control-analysis' ? (
-          <section className="card">
+          <section className="control-analysis-page">
             <div className="page-title-row">
               <div>
                 <h2>{'\u529f\u80fd 3\uff1a\u63a7\u5236\u73af\u8def\u5206\u6790'}</h2>
@@ -1778,52 +1396,12 @@ function App() {
                 </button>
               </div>
             </div>
-            <input
-              ref={controlAnalysisFileInputRef}
-              type="file"
-              className="hidden-input"
-              accept=".ulg"
-              multiple
-              onChange={handleControlAnalysisFileChange}
-            />
-            <div className="control-analysis-toolbar">
-              <div className="actions control-analysis-actions">
-                <button
-                  type="button"
-                  className="button"
-                  onClick={handleChooseControlAnalysisFile}
-                >
-                  {'\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6'}
-                </button>
-                <button
-                  type="button"
-                  className="button"
-                  onClick={handleUploadControlAnalysisLog}
-                  disabled={isControlAnalysisUploading || controlAnalysisFiles.length === 0}
-                >
-                  {isControlAnalysisUploading
-                    ? '\u4e0a\u4f20\u4e2d...'
-                    : '\u4e0a\u4f20\u5e76\u5bf9\u6bd4\u65e5\u5fd7'}
-                </button>
-                <button
-                  type="button"
-                  className="button"
-                  onClick={() => {
-                    controlAnalysisReportsRef.current.forEach((item) => {
-                      controlQualityRequestTrackerRef.current?.invalidate(
-                        item.clientId,
-                      )
-                    })
-                    setControlAnalysisFiles([])
-                    setControlAnalysisReports([])
-                    setControlQualityVisibleRanges({})
-                    setControlAnalysisStatusText('')
-                  }}
-                  disabled={isControlAnalysisUploading || controlAnalysisFiles.length === 0}
-                >
-                  {'\u6e05\u7a7a\u5df2\u9009\u65e5\u5fd7'}
-                </button>
-              </div>
+            <div className="control-analysis-meta-row">
+              <p className="hint control-analysis-file-summary">
+                {controlAnalysisReports.length > 0
+                  ? controlAnalysisReports.map((item) => item.fileName).join('、')
+                  : '等待入口选择日志'}
+              </p>
               <span
                 className={`control-analysis-status control-analysis-status-${
                   controlAnalysisHasReports ? 'done' : 'idle'
@@ -1832,20 +1410,6 @@ function App() {
                 {controlAnalysisStatusLabel}
               </span>
             </div>
-            {controlAnalysisFiles.length > 0 && !controlAnalysisHasReports ? (
-              <div className="control-compare-selected">
-                <p className="hint">
-                  {`\u5df2\u9009 ${controlAnalysisFiles.length} \u4efd\u6587\u4ef6\uff1a`}
-                </p>
-                <ul className="batch-list">
-                  {controlAnalysisFiles.map((file, index) => (
-                    <li key={`${getFileSelectionKey(file)}-${index}`}>
-                      {file.name}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
             {controlAnalysisStatusText ? (
               <p className="hint control-analysis-status-text">
                 {controlAnalysisStatusText}

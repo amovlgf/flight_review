@@ -96,9 +96,12 @@ describe('ControlQualityPanel parameter recommendations', () => {
     expect(html).toContain('0.15')
     expect(html).toContain('0.1425')
     expect(html).toContain('control-parameter-tooltip-trigger')
+    expect(html).toContain('control-parameter-reason-tooltip-trigger')
     expect(html).toContain('type="button"')
     expect(html).toContain('aria-describedby=')
     expect(html).not.toContain('data-tooltip=')
+    expect(html).not.toContain('风险级别')
+    expect(html).not.toContain('control-parameter-level')
     expect(html).toContain('横滚角速度比例增益')
     expect(html).not.toContain('MC_ROLLRATE_FF')
     expect(html).not.toContain('Max Step')
@@ -118,6 +121,67 @@ describe('ControlQualityPanel parameter recommendations', () => {
 
     expect(html).toContain('当前区间未发现需要调整的 PID 参数。')
   })
+
+  it('renders executable recommendations and diagnostic guidance in one table', () => {
+    const rateD = buildRecommendation({
+      parameter: 'MC_ROLLRATE_D',
+      gain: 'D',
+      currentValue: 0.003,
+      targetValue: 0.002925,
+      changePercent: -2.5,
+      recommendationLevel: 'risk_limited',
+      allowedDirection: 'decrease',
+      stepLimitPercent: 2.5,
+      riskReason:
+        'Mechanical or IMU high-frequency noise is present; gain increases are limited.',
+      reason:
+        'Mechanical or IMU high-frequency noise is present without control oscillation; reduce RATE_D with a small step.',
+    })
+    const rateP = buildRecommendation({
+      parameter: 'MC_ROLLRATE_P',
+      gain: 'P',
+      status: 'unchanged',
+      targetValue: 0.15,
+      changePercent: 0,
+      recommendationLevel: 'unchanged',
+      allowedDirection: 'decrease',
+      stepLimitPercent: 2.5,
+      riskReason:
+        'Mechanical or IMU high-frequency noise is present; gain increases are limited.',
+      reason:
+        'Mechanical or IMU high-frequency noise is present; automatic gain increases are not allowed in this risk state.',
+    })
+    const report = buildReport([rateD])
+    const rateTuning = report.parameterTuning?.loops.rate
+    if (rateTuning) {
+      rateTuning.displayParameters = [rateD, rateP]
+    }
+
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={report}
+        isLoading={false}
+        errorText=""
+        onApplyRange={() => {}}
+      />,
+    )
+
+    expect(html).toContain('control-parameter-unified-table')
+    expect(html).not.toContain('control-parameter-guidance-table')
+    expect(html).toContain('MC_ROLLRATE_D')
+    expect(html).toContain('0.002925')
+    expect(html).toContain('MC_ROLLRATE_P')
+    expect(html).toContain('保持当前值')
+
+    const tableHtml = html.slice(html.indexOf('control-parameter-unified-table'))
+    expect(tableHtml).toContain('推荐/候选值')
+    expect(tableHtml).not.toContain('档位')
+    expect(tableHtml).not.toContain('风险受限')
+    expect(tableHtml).toContain('保持当前')
+    expect(tableHtml).toContain('control-parameter-reason-tooltip-trigger')
+  })
+
   it('renders blocked display parameters with Chinese recommendation text', () => {
     const report = buildReport([])
     const rateTuning = report.parameterTuning?.loops.rate
@@ -157,7 +221,7 @@ describe('ControlQualityPanel parameter recommendations', () => {
     expect(html).toContain('MC_ROLLRATE_P')
     expect(html).toContain('0.15')
     expect(html).toContain('暂不推荐')
-    expect(html).toContain('上游角速度环状态不健康，暂不生成下游 PID 推荐。')
+    expect(html).toContain('control-parameter-blocker-summary')
     expect(html).not.toContain(
       'Rate loop is not healthy enough for downstream tuning.',
     )
@@ -190,8 +254,73 @@ describe('ControlQualityPanel parameter recommendations', () => {
 
     expect(html).toContain('MC_ROLLRATE_P')
     expect(html).toContain('0.1425')
-    expect(html).toContain('人工复核')
+    expect(html).not.toContain('control-parameter-level-risk_limited')
+    expect(html).not.toContain('>人工复核<')
     expect(html).toContain('需人工复核')
+  })
+
+  it('renders normal, risk-limited, and manual-review rows in one recommendation table', () => {
+    const normalP = buildRecommendation({
+      parameter: 'MC_PITCHRATE_P',
+      currentValue: 0.16,
+      targetValue: 0.152,
+      changePercent: -5,
+      recommendationLevel: 'actionable',
+    })
+    const riskLimitedD = buildRecommendation({
+      parameter: 'MC_ROLLRATE_D',
+      gain: 'D',
+      targetValue: 0.002925,
+      changePercent: -2.5,
+      recommendationLevel: 'risk_limited',
+    })
+    const manualP = buildRecommendation({
+      status: 'manual_candidate',
+      targetValue: 0.14625,
+      changePercent: -2.5,
+      recommendationLevel: 'manual_review',
+      reason:
+        'Severe control oscillation requires manual review; candidate reduces RATE_P conservatively.',
+      nextAction:
+        'Manual review is required before applying this diagnostic-only candidate.',
+      allowedDirection: 'decrease',
+      stepLimitPercent: 2.5,
+      riskReason:
+        'Severe control oscillation is present; this value is for manual review only.',
+    })
+    const report = buildReport([normalP, riskLimitedD])
+    const rateTuning = report.parameterTuning?.loops.rate
+    if (rateTuning) {
+      rateTuning.displayParameters = [normalP, riskLimitedD, manualP]
+    }
+
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={report}
+        isLoading={false}
+        errorText=""
+        onApplyRange={() => {}}
+      />,
+    )
+
+    expect(html).toContain('control-parameter-unified-table')
+    expect(html).not.toContain('control-parameter-manual-candidate-table')
+    expect(html).not.toContain('control-parameter-guidance-table')
+
+    const tableHtml = html.slice(html.indexOf('control-parameter-unified-table'))
+    expect(tableHtml).toContain('MC_PITCHRATE_P')
+    expect(tableHtml).toContain('MC_ROLLRATE_D')
+    expect(tableHtml).toContain('MC_ROLLRATE_P')
+    expect(tableHtml).toContain('0.152')
+    expect(tableHtml).toContain('0.002925')
+    expect(tableHtml).toContain('0.14625')
+    expect(tableHtml).not.toContain('档位')
+    expect(tableHtml).not.toContain('正常推荐')
+    expect(tableHtml).not.toContain('风险受限')
+    expect(tableHtml).not.toContain('人工复核候选')
+    expect(tableHtml).toContain('control-parameter-reason-tooltip-trigger')
+    expect(tableHtml).not.toContain('target_generated')
   })
 
   it('renders diagnostic-first text for severe vibration blockers', () => {
@@ -223,9 +352,10 @@ describe('ControlQualityPanel parameter recommendations', () => {
       />,
     )
 
-    expect(html).toContain('诊断优先')
-    expect(html).toContain('暂不推荐')
-    expect(html).toContain('严重振荡或严重震动')
+    expect(html).not.toContain('control-parameter-level-deferred')
+    expect(html).toContain('control-parameter-unified-table')
+    expect(html).not.toContain('>诊断优先<')
+    expect(html).toContain('>暂不推荐<')
     expect(html).not.toContain('Severe vibration or severe oscillation')
   })
 
@@ -256,7 +386,8 @@ describe('ControlQualityPanel parameter recommendations', () => {
     )
 
     expect(html).toContain('MC_ROLLRATE_D')
-    expect(html).toContain('仅保守降低')
+    expect(html).not.toContain('control-parameter-level-actionable')
+    expect(html).not.toContain('>仅保守降低<')
     expect(html).toContain('优先保守降低 RATE_D')
     expect(html).not.toContain('D-term or actuator high-frequency noise')
   })
@@ -297,7 +428,6 @@ describe('ControlQualityPanel parameter recommendations', () => {
 
     expect(html).toContain('MC_ROLL_P')
     expect(html).toContain('暂不推荐')
-    expect(html).toContain('先处理上游角速度环推荐：MC_ROLLRATE_D')
     expect(html).not.toContain('Rate loop is not healthy enough')
   })
 
@@ -328,7 +458,7 @@ describe('ControlQualityPanel parameter recommendations', () => {
       />,
     )
 
-    expect(html).toContain('请重新框选包含明显指令变化的片段')
+    expect(html).toContain('暂不推荐')
     expect(html).not.toContain('setpoint excitation is too low')
   })
 })

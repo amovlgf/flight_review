@@ -1,0 +1,1074 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>功能 1：飞行日志摘要预览</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --page: #f4f7fb;
+        --surface: #ffffff;
+        --surface-soft: #f8fafc;
+        --ink: #172033;
+        --text: #334155;
+        --muted: #64748b;
+        --line: #d7dee8;
+        --line-soft: #e6ebf2;
+        --blue: #2563eb;
+        --blue-soft: #e9f1ff;
+        --green: #0f8f65;
+        --green-soft: #e7f7f0;
+        --amber: #b7791f;
+        --amber-soft: #fff6df;
+        --red: #b42318;
+        --red-soft: #fff0ef;
+        --violet: #6d5bd0;
+        --shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        min-width: 320px;
+      }
+
+      body {
+        margin: 0;
+        background: var(--page);
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", "Microsoft YaHei", sans-serif;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      .app-shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        border-bottom: 1px solid var(--line);
+        padding: 12px clamp(16px, 3vw, 36px);
+        background: rgba(255, 255, 255, 0.94);
+        backdrop-filter: blur(14px);
+      }
+
+      .brand {
+        min-width: 0;
+      }
+
+      .brand-title {
+        margin: 0;
+        color: var(--ink);
+        font-size: 18px;
+        font-weight: 760;
+        letter-spacing: 0;
+      }
+
+      .brand-subtitle {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .pill,
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 5px 10px;
+        background: var(--surface);
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .status-pill::before,
+      .timeline-node::before,
+      .data-row::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        flex: 0 0 7px;
+        border-radius: 999px;
+        background: var(--muted);
+      }
+
+      .status-ok {
+        border-color: #9bd9bd;
+        background: var(--green-soft);
+        color: #096b4d;
+      }
+
+      .status-ok::before {
+        background: var(--green);
+      }
+
+      .status-warn {
+        border-color: #f0c56a;
+        background: var(--amber-soft);
+        color: #7a4c0f;
+      }
+
+      .status-warn::before {
+        background: #d99610;
+      }
+
+      .status-muted {
+        background: var(--surface-soft);
+        color: var(--muted);
+      }
+
+      .page {
+        display: grid;
+        grid-template-columns: minmax(240px, 288px) minmax(0, 1fr);
+        gap: 18px;
+        width: min(1440px, 100%);
+        margin: 0 auto;
+        padding: 18px clamp(16px, 3vw, 36px) 36px;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 73px;
+        align-self: start;
+        display: grid;
+        gap: 14px;
+      }
+
+      .panel,
+      .tool-panel,
+      .phase-row,
+      .status-block,
+      .chart-panel,
+      .report-panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+      }
+
+      .tool-panel {
+        padding: 14px;
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      .panel-title {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .panel-title h2,
+      .panel-title h3 {
+        margin: 0;
+        color: var(--ink);
+        font-size: 15px;
+        font-weight: 760;
+      }
+
+      .panel-title small {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .upload-target {
+        display: grid;
+        gap: 12px;
+        border: 1px dashed #9ba9bb;
+        border-radius: 8px;
+        padding: 16px;
+        background: var(--surface-soft);
+      }
+
+      .upload-target strong {
+        color: var(--ink);
+      }
+
+      .upload-target p,
+      .muted {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .button-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 12px;
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .btn svg {
+        width: 15px;
+        height: 15px;
+        stroke-width: 2;
+      }
+
+      .btn-primary {
+        border-color: #1d4ed8;
+        background: var(--blue);
+        color: #ffffff;
+      }
+
+      .btn-secondary {
+        background: var(--surface-soft);
+      }
+
+      .btn:hover {
+        border-color: #94a3b8;
+      }
+
+      .btn-primary:hover {
+        border-color: #1e3a8a;
+      }
+
+      .segmented {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 4px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 4px;
+        background: var(--surface-soft);
+      }
+
+      .segmented button {
+        border: 0;
+        border-radius: 6px;
+        padding: 8px 10px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .segmented button.active {
+        background: var(--surface);
+        color: var(--blue);
+        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+      }
+
+      .step-list {
+        display: grid;
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .step-list li {
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr);
+        gap: 9px;
+        align-items: start;
+      }
+
+      .step-index {
+        display: grid;
+        width: 26px;
+        height: 26px;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface-soft);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .step-list strong {
+        display: block;
+        color: var(--ink);
+        font-size: 13px;
+      }
+
+      .step-list span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .main {
+        display: grid;
+        gap: 16px;
+        min-width: 0;
+      }
+
+      .workspace-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: start;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 18px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .workspace-head h1 {
+        margin: 0;
+        color: var(--ink);
+        font-size: clamp(22px, 3vw, 32px);
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+
+      .workspace-head p {
+        max-width: 820px;
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+
+      .head-meta {
+        display: grid;
+        justify-items: end;
+        gap: 8px;
+        min-width: 220px;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .metric {
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 11px 12px;
+        background: var(--surface);
+      }
+
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 4px;
+        color: var(--ink);
+        font-size: 19px;
+        font-weight: 780;
+        overflow-wrap: anywhere;
+      }
+
+      .metric small {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .content-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.22fr) minmax(320px, 0.78fr);
+        gap: 16px;
+        align-items: start;
+      }
+
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .phase-row {
+        display: grid;
+        grid-template-columns: 112px minmax(0, 1fr) auto;
+        gap: 14px;
+        align-items: center;
+        padding: 12px;
+      }
+
+      .phase-time {
+        color: var(--ink);
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+          monospace;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .phase-main h4,
+      .status-block h4,
+      .chart-panel h4,
+      .report-panel h4 {
+        margin: 0;
+        color: var(--ink);
+        font-size: 14px;
+      }
+
+      .phase-main p,
+      .status-block p,
+      .chart-panel p,
+      .report-panel p {
+        margin: 5px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .phase-track {
+        height: 8px;
+        margin-top: 9px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #e5e7eb;
+      }
+
+      .phase-track span {
+        display: block;
+        height: 100%;
+        border-radius: 999px;
+      }
+
+      .track-takeoff {
+        width: 26%;
+        background: var(--blue);
+      }
+
+      .track-cruise {
+        width: 78%;
+        background: var(--green);
+      }
+
+      .track-landing {
+        width: 41%;
+        background: var(--amber);
+      }
+
+      .status-block {
+        display: grid;
+        gap: 12px;
+        padding: 14px;
+      }
+
+      .status-head {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .mini-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .mini-cell {
+        min-width: 0;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        padding: 9px 10px;
+        background: var(--surface-soft);
+      }
+
+      .mini-cell span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .mini-cell strong {
+        display: block;
+        margin-top: 3px;
+        color: var(--ink);
+        font-size: 13px;
+      }
+
+      .data-gate {
+        display: grid;
+        gap: 8px;
+      }
+
+      .data-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: var(--surface-soft);
+        font-size: 13px;
+      }
+
+      .data-row.good::before {
+        background: var(--green);
+      }
+
+      .data-row.missing::before {
+        background: var(--amber);
+      }
+
+      .chart-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .chart-panel {
+        min-width: 0;
+        padding: 12px;
+      }
+
+      .chart-toolbar {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .chart-box {
+        position: relative;
+        min-height: 184px;
+        overflow: hidden;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        background:
+          linear-gradient(#ffffff 23px, transparent 24px),
+          linear-gradient(90deg, #ffffff 23px, transparent 24px),
+          #edf2f7;
+        background-size: 24px 24px;
+      }
+
+      .chart-box svg {
+        position: absolute;
+        inset: 8px;
+        width: calc(100% - 16px);
+        height: calc(100% - 16px);
+      }
+
+      .axis-label {
+        position: absolute;
+        right: 10px;
+        bottom: 8px;
+        color: var(--muted);
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+          monospace;
+        font-size: 11px;
+      }
+
+      .report-panel {
+        padding: 14px;
+      }
+
+      .report-preview {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        padding: 12px;
+        background: #fbfcfe;
+        color: var(--text);
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+          monospace;
+        font-size: 12px;
+      }
+
+      .report-preview strong {
+        color: var(--ink);
+      }
+
+      .limited-state {
+        display: none;
+      }
+
+      body[data-mode="limited"] .normal-state {
+        display: none;
+      }
+
+      body[data-mode="limited"] .limited-state {
+        display: grid;
+      }
+
+      body[data-mode="limited"] .status-ok {
+        border-color: #f0c56a;
+        background: var(--amber-soft);
+        color: #7a4c0f;
+      }
+
+      body[data-mode="limited"] .status-ok::before {
+        background: #d99610;
+      }
+
+      .empty-panel {
+        border: 1px solid #f0c56a;
+        border-radius: 8px;
+        padding: 18px;
+        background: var(--amber-soft);
+      }
+
+      .empty-panel h3 {
+        margin: 0;
+        color: #7a4c0f;
+        font-size: 16px;
+      }
+
+      .empty-panel p {
+        margin: 8px 0 0;
+        color: #7a4c0f;
+      }
+
+      @media (max-width: 1180px) {
+        .summary-grid {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .content-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          position: static;
+        }
+      }
+
+      @media (max-width: 860px) {
+        .topbar,
+        .workspace-head,
+        .status-head {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .page {
+          grid-template-columns: 1fr;
+        }
+
+        .workspace-head {
+          grid-template-columns: 1fr;
+        }
+
+        .head-meta {
+          justify-items: start;
+          min-width: 0;
+        }
+
+        .chart-grid,
+        .summary-grid,
+        .mini-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .phase-row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body data-mode="normal">
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <p class="brand-title">飞行日志分析平台</p>
+          <p class="brand-subtitle">功能 1 样式预览 / 独立静态 HTML</p>
+        </div>
+        <div class="topbar-actions">
+          <span class="pill">POST /api/logs/:logId/flight-summary</span>
+          <span class="status-pill status-ok">摘要完成</span>
+        </div>
+      </header>
+
+      <main class="page">
+        <aside class="sidebar">
+          <section class="tool-panel">
+            <div class="panel-title">
+              <h2>日志输入</h2>
+              <small>.ulg</small>
+            </div>
+            <div class="upload-target">
+              <div>
+                <strong>demo-flight-2026-07-08.ulg</strong>
+                <p>52.8 MB / PX4 ULog v1 / 已上传</p>
+              </div>
+              <div class="button-row">
+                <button class="btn btn-primary" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M12 3v12" />
+                    <path d="m7 8 5-5 5 5" />
+                    <path d="M5 21h14" />
+                  </svg>
+                  选择日志
+                </button>
+                <button class="btn btn-secondary" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M4 12a8 8 0 1 0 2.34-5.66" />
+                    <path d="M4 4v6h6" />
+                  </svg>
+                  重新生成
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="tool-panel">
+            <div class="panel-title">
+              <h2>预览状态</h2>
+              <small>切换结果</small>
+            </div>
+            <div class="segmented" role="tablist" aria-label="状态切换">
+              <button class="active" type="button" data-mode-button="normal">
+                正常摘要
+              </button>
+              <button type="button" data-mode-button="limited">数据不足</button>
+            </div>
+          </section>
+
+          <section class="tool-panel">
+            <div class="panel-title">
+              <h2>处理步骤</h2>
+              <small>4 步</small>
+            </div>
+            <ol class="step-list">
+              <li>
+                <span class="step-index">1</span>
+                <span><strong>上传日志</strong><span>单份 PX4 .ulg 文件</span></span>
+              </li>
+              <li>
+                <span class="step-index">2</span>
+                <span><strong>数据门禁</strong><span>检查必需 topic 与字段</span></span>
+              </li>
+              <li>
+                <span class="step-index">3</span>
+                <span><strong>阶段归纳</strong><span>解锁、起飞、巡航、降落</span></span>
+              </li>
+              <li>
+                <span class="step-index">4</span>
+                <span><strong>导出报告</strong><span>生成简短 Markdown</span></span>
+              </li>
+            </ol>
+          </section>
+        </aside>
+
+        <section class="main">
+          <section class="workspace-head">
+            <div>
+              <h1>功能 1：飞行日志摘要</h1>
+              <p>
+                单日志工作台视图。优先展示能否分析、飞行阶段、failsafe
+                与传感器融合状态，曲线用于支撑摘要结论，不在本页做事故归因或 PID 调参。
+              </p>
+            </div>
+            <div class="head-meta">
+              <span class="status-pill status-ok normal-state">数据门禁通过</span>
+              <span class="status-pill status-warn limited-state">数据门禁阻断</span>
+              <button class="btn btn-secondary" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <path d="M7 10l5 5 5-5" />
+                  <path d="M12 15V3" />
+                </svg>
+                导出简短报告
+              </button>
+            </div>
+          </section>
+
+          <section class="summary-grid normal-state">
+            <div class="metric">
+              <span>飞行总时长</span>
+              <strong>12:48</strong>
+              <small>768.4 s</small>
+            </div>
+            <div class="metric">
+              <span>解锁时间</span>
+              <strong>00:13</strong>
+              <small>armed</small>
+            </div>
+            <div class="metric">
+              <span>起飞时间</span>
+              <strong>00:42</strong>
+              <small>landed=false</small>
+            </div>
+            <div class="metric">
+              <span>降落时间</span>
+              <strong>12:21</strong>
+              <small>landed=true</small>
+            </div>
+            <div class="metric">
+              <span>Failsafe</span>
+              <strong>否</strong>
+              <small>未检测到窗口</small>
+            </div>
+            <div class="metric">
+              <span>数据完整性</span>
+              <strong>部分受限</strong>
+              <small>缺少可选 topic</small>
+            </div>
+          </section>
+
+          <section class="empty-panel limited-state">
+            <h3>数据不足，无法生成完整飞行摘要</h3>
+            <p>
+              当前日志缺少 vehicle_land_detected 与位置 topic。页面保留上传结果、
+              数据门禁原因和可选字段缺失列表，不展示阶段、状态曲线和导出按钮。
+            </p>
+          </section>
+
+          <section class="content-grid normal-state">
+            <div class="stack">
+              <section class="panel">
+                <div class="panel-title">
+                  <h3>飞行阶段</h3>
+                  <small>基于解锁、landed 状态与模式变化</small>
+                </div>
+                <div class="stack">
+                  <article class="phase-row">
+                    <div class="phase-time">00:13 - 00:42</div>
+                    <div class="phase-main">
+                      <h4>起飞准备</h4>
+                      <p>MANUAL -> POSCTL，解锁后等待起飞，位置数据稳定。</p>
+                      <div class="phase-track"><span class="track-takeoff"></span></div>
+                    </div>
+                    <span class="status-pill status-muted">29.4 s</span>
+                  </article>
+                  <article class="phase-row">
+                    <div class="phase-time">00:42 - 11:56</div>
+                    <div class="phase-main">
+                      <h4>空中飞行</h4>
+                      <p>POSCTL / AUTO_MISSION，主飞行段占比最高。</p>
+                      <div class="phase-track"><span class="track-cruise"></span></div>
+                    </div>
+                    <span class="status-pill status-ok">674.1 s</span>
+                  </article>
+                  <article class="phase-row">
+                    <div class="phase-time">11:56 - 12:21</div>
+                    <div class="phase-main">
+                      <h4>降落过程</h4>
+                      <p>ALTCTL -> LAND，landed 状态稳定后进入地面阶段。</p>
+                      <div class="phase-track"><span class="track-landing"></span></div>
+                    </div>
+                    <span class="status-pill status-warn">25.0 s</span>
+                  </article>
+                </div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-title">
+                  <h3>证据曲线</h3>
+                  <small>正式接入时替换为 ECharts</small>
+                </div>
+                <div class="chart-grid">
+                  <article class="chart-panel">
+                    <div class="chart-toolbar">
+                      <div>
+                        <h4>高度与速度</h4>
+                        <p>vehicle_local_position</p>
+                      </div>
+                      <span class="status-pill status-muted">联动</span>
+                    </div>
+                    <div class="chart-box">
+                      <svg viewBox="0 0 420 180" preserveAspectRatio="none">
+                        <path
+                          d="M10 148 C65 145 84 118 117 98 C158 73 193 68 223 80 C270 99 292 52 336 58 C370 63 390 42 410 35"
+                          fill="none"
+                          stroke="#2563eb"
+                          stroke-width="3"
+                        />
+                        <path
+                          d="M10 154 C75 153 110 132 144 126 C190 116 225 121 250 105 C284 84 310 94 338 78 C370 60 390 62 410 54"
+                          fill="none"
+                          stroke="#0f8f65"
+                          stroke-width="3"
+                        />
+                      </svg>
+                      <span class="axis-label">time / s</span>
+                    </div>
+                  </article>
+
+                  <article class="chart-panel">
+                    <div class="chart-toolbar">
+                      <div>
+                        <h4>定位有效性</h4>
+                        <p>estimator_status_flags</p>
+                      </div>
+                      <span class="status-pill status-ok">稳定</span>
+                    </div>
+                    <div class="chart-box">
+                      <svg viewBox="0 0 420 180" preserveAspectRatio="none">
+                        <path
+                          d="M10 132 H78 V52 H160 V52 H246 V88 H300 V52 H410"
+                          fill="none"
+                          stroke="#6d5bd0"
+                          stroke-width="3"
+                        />
+                        <path
+                          d="M10 148 H112 V92 H194 V92 H280 V132 H342 V92 H410"
+                          fill="none"
+                          stroke="#b7791f"
+                          stroke-width="3"
+                        />
+                      </svg>
+                      <span class="axis-label">0 / 1</span>
+                    </div>
+                  </article>
+                </div>
+              </section>
+            </div>
+
+            <div class="stack">
+              <section class="status-block">
+                <div class="status-head">
+                  <div>
+                    <h4>飞行状态</h4>
+                    <p>故障保护与传感器融合摘要</p>
+                  </div>
+                  <span class="status-pill status-ok">无阻断</span>
+                </div>
+                <div class="mini-grid">
+                  <div class="mini-cell">
+                    <span>Failsafe</span>
+                    <strong>未触发</strong>
+                  </div>
+                  <div class="mini-cell">
+                    <span>GPS</span>
+                    <strong>3D Fix</strong>
+                  </div>
+                  <div class="mini-cell">
+                    <span>卫星数</span>
+                    <strong>18</strong>
+                  </div>
+                </div>
+              </section>
+
+              <section class="status-block">
+                <div class="status-head">
+                  <div>
+                    <h4>数据门禁</h4>
+                    <p>必需字段通过，可选字段部分缺失</p>
+                  </div>
+                  <span class="status-pill status-warn">部分受限</span>
+                </div>
+                <div class="data-gate">
+                  <div class="data-row good">timestamp / vehicle_status 可用</div>
+                  <div class="data-row good">vehicle_land_detected 可用</div>
+                  <div class="data-row good">local 或 global position 可用</div>
+                  <div class="data-row missing">缺少 actuator_outputs，可跳过控制输出曲线</div>
+                  <div class="data-row missing">缺少 estimator_innovations，融合质量只能简述</div>
+                </div>
+              </section>
+
+              <section class="report-panel">
+                <div class="status-head">
+                  <div>
+                    <h4>简短报告预览</h4>
+                    <p>导出 Markdown 前先展示摘要结构</p>
+                  </div>
+                  <button class="btn btn-secondary" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <path d="M14 2v6h6" />
+                    </svg>
+                    预览
+                  </button>
+                </div>
+                <div class="report-preview">
+                  <strong># Flight Log Short Report</strong>
+                  <span>1. Basic log information</span>
+                  <span>2. Flight phases</span>
+                  <span>3. Flight status</span>
+                  <span>4. Data limitations</span>
+                  <span>5. Engineer note</span>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section class="content-grid limited-state">
+            <section class="panel">
+              <div class="panel-title">
+                <h3>阻断原因</h3>
+                <small>dataGate.blockingReasons</small>
+              </div>
+              <div class="data-gate">
+                <div class="data-row missing">缺少 vehicle_land_detected，无法稳定识别起飞与降落。</div>
+                <div class="data-row missing">缺少 vehicle_local_position 或 vehicle_global_position。</div>
+                <div class="data-row good">timestamp 与 vehicle_status 已读取。</div>
+              </div>
+            </section>
+            <section class="report-panel">
+              <h4>页面行为建议</h4>
+              <p>
+                阻断状态下仅显示日志基础信息、缺失字段和重试入口；隐藏阶段时间轴、
+                飞行状态曲线和报告导出，避免让用户误以为已经完成分析。
+              </p>
+            </section>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const modeButtons = document.querySelectorAll("[data-mode-button]");
+
+      modeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          const mode = button.getAttribute("data-mode-button") || "normal";
+          document.body.setAttribute("data-mode", mode);
+          modeButtons.forEach((item) => {
+            item.classList.toggle("active", item === button);
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

@@ -5,6 +5,7 @@ import type {
   ControlQualityPayload,
   ControlQualityReport,
   FetchLogListParams,
+  FlightSummaryResponse,
   IncidentAnalysisResponse,
   LogListResponse,
   UploadLogResponse,
@@ -20,6 +21,26 @@ import type {
 
 const API_BASE_URL = 'http://localhost:3001/api'
 
+async function readApiError(response: Response, fallback: string) {
+  try {
+    const payload: unknown = await response.json()
+    if (payload && typeof payload === 'object') {
+      const item = payload as { message?: unknown; reason?: unknown; code?: unknown }
+      const parts = [
+        typeof item.message === 'string' ? item.message : '',
+        typeof item.reason === 'string' ? item.reason : '',
+        typeof item.code === 'string' ? item.code : '',
+      ].filter((part, index, values) => part && values.indexOf(part) === index)
+      if (parts.length > 0) {
+        return parts.join(' ')
+      }
+    }
+  } catch {
+    // Some failures, such as an old backend route returning HTML 404, are not JSON.
+  }
+  return `${fallback} (HTTP ${response.status})`
+}
+
 export async function uploadLogFile(file: File): Promise<UploadLogResponse> {
   const formData = new FormData()
   formData.append('logFile', file)
@@ -30,7 +51,7 @@ export async function uploadLogFile(file: File): Promise<UploadLogResponse> {
   })
 
   if (!response.ok) {
-    throw new Error('UPLOAD_FAILED')
+    throw new Error(await readApiError(response, 'UPLOAD_FAILED'))
   }
 
   return response.json()
@@ -144,6 +165,24 @@ export async function runIncidentAnalysis(
       // ignore JSON parse error and keep default message
     }
     throw new Error(errorMessage)
+  }
+
+  return response.json()
+}
+
+export async function fetchFlightSummary(
+  logId: string,
+): Promise<FlightSummaryResponse> {
+  const response = await fetch(`${API_BASE_URL}/logs/${logId}/flight-summary`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({}),
+  })
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, 'FLIGHT_SUMMARY_FAILED'))
   }
 
   return response.json()

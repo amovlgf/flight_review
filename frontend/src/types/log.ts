@@ -172,6 +172,7 @@ export type ControlQualityParameterBound = {
 
 export type ControlQualityParameterTuningStatus =
   | 'target_generated'
+  | 'manual_candidate'
   | 'bounds_required'
   | 'invalid_bounds'
   | 'missing_current'
@@ -205,7 +206,16 @@ export type ControlQualityParameterTuningItem = {
   confidence?: 'low' | 'medium' | 'high' | string
   evidence?: string[]
   blockers?: string[]
-  recommendationLevel?: 'actionable' | 'risk_limited' | 'deferred' | 'unchanged' | string
+  recommendationLevel?:
+    | 'actionable'
+    | 'risk_limited'
+    | 'manual_review'
+    | 'deferred'
+    | 'unchanged'
+    | string
+  allowedDirection?: 'increase' | 'decrease' | 'both' | 'hold' | string
+  stepLimitPercent?: number
+  riskReason?: string | null
   nextAction?: string
   upstreamReference?: {
     loop: string
@@ -233,8 +243,7 @@ export type ControlQualityTuningSafety = {
     | string
   pidRecommendationPolicy?:
     | 'normal'
-    | 'weak_only'
-    | 'decrease_only'
+    | 'risk_limited'
     | 'diagnostic_only'
     | 'blocked'
     | string
@@ -721,4 +730,109 @@ export type IncidentAnalysisResponse = {
   }>
   warnings: AnalysisWarning[]
   missingSignals: MissingSignal[]
+}
+
+export type FlightSummaryEmbeddedChart = {
+  id: string
+  title: string
+  series: Array<
+    ChartSeries & {
+      source?: {
+        topic: string
+        instance: number
+        field: string
+      } | null
+    }
+  >
+}
+
+export type FlightSummaryDataGate = {
+  canAnalyze: boolean
+  missingRequired: string[]
+  missingOptional: string[]
+  blockingReasons: string[]
+  limitations: string[]
+}
+
+export type FlightSummaryModeChange = {
+  startS: number
+  endS: number
+  mode: string
+  modeCode: number
+}
+
+export type FlightSummaryPhase = {
+  id: string
+  name: string
+  startS: number
+  endS: number
+  durationS: number
+  modeChanges: FlightSummaryModeChange[]
+  sourceSignals: string[]
+  charts: FlightSummaryEmbeddedChart[]
+}
+
+export type FlightSummaryFailsafeEvent = {
+  id: string
+  startS: number
+  endS: number | null
+  durationS: number | null
+  phaseId: string
+  phaseName: string
+  mode: string
+  activeFlags: string[]
+}
+
+export type FlightSummaryStatusChange = {
+  signal: string
+  timeS: number
+  value: number
+}
+
+export type FlightSummaryFlightStatus = {
+  failsafe: {
+    triggered: boolean
+    events: FlightSummaryFailsafeEvent[]
+    mainChanges: string[]
+    charts: FlightSummaryEmbeddedChart[]
+  }
+  estimator: {
+    status: string
+    localPositionValid: boolean | null
+    globalPositionValid: boolean | null
+    horizontalPositionValid: boolean | null
+    verticalPositionValid: boolean | null
+    gpsStatus: string
+    satellitesUsed: number | string | null
+    heightSource: string
+    changes: FlightSummaryStatusChange[]
+    charts: FlightSummaryEmbeddedChart[]
+  }
+}
+
+export type FlightSummaryResponse = {
+  contractVersion: 'flight-summary.v1' | string
+  code: 'OK' | 'DATA_GATE_BLOCKED' | string
+  message: string
+  logId: string
+  fileName: string
+  uploadedAt: string
+  metadata: LogMetadata
+  dataGate: FlightSummaryDataGate
+  summary: {
+    totalDurationS: number | null
+    armedAtS: number | null
+    takeoffAtS: number | null
+    landingAtS: number | null
+    failsafeTriggered: boolean | null
+    dataCompleteness: 'complete' | 'partial' | string
+    armedFlightTimeS?: number | null
+  } | null
+  phases: FlightSummaryPhase[]
+  flightStatus: FlightSummaryFlightStatus | null
+  reportMarkdown: string | null
+  parser?: {
+    success: boolean
+    error: string | null
+  }
 }
