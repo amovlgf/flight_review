@@ -88,7 +88,6 @@ describe('ControlQualityPanel parameter recommendations', () => {
         ])}
         isLoading={false}
         errorText=""
-        onApplyRange={() => {}}
       />,
     )
 
@@ -115,11 +114,126 @@ describe('ControlQualityPanel parameter recommendations', () => {
         report={buildReport([])}
         isLoading={false}
         errorText=""
-        onApplyRange={() => {}}
       />,
     )
 
     expect(html).toContain('当前区间未发现需要调整的 PID 参数。')
+  })
+
+  it('keeps the panel chrome compact inside the function three page', () => {
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={buildReport([])}
+        isLoading={false}
+        errorText=""
+      />,
+    )
+
+    expect(html).not.toContain('分析区间：')
+    expect(html).not.toContain('control-quality-range-note')
+    expect(html).not.toContain('control-quality-summary')
+    expect(html).not.toContain('可分析环路')
+    expect(html).not.toContain('不可用环路')
+    expect(html).not.toContain('开始时间')
+    expect(html).not.toContain('结束时间')
+    expect(html).not.toContain('重新计算')
+    expect(html).not.toContain('class="control-quality-range"')
+    expect(html).not.toContain('control-quality-range-input')
+    expect(html).not.toContain('控制环质量')
+    expect(html).not.toContain('page-title-row')
+  })
+
+  it('filters rate PID recommendations to the currently displayed chart axis', () => {
+    const report = buildReport([])
+    report.loops.rate = {
+      status: 'available',
+      axis: {
+        roll: { status: 'available', unit: 'rad/s', metrics: {} },
+        pitch: { status: 'available', unit: 'rad/s', metrics: {} },
+        yaw: { status: 'available', unit: 'rad/s', metrics: {} },
+      },
+      charts: [],
+    }
+    const rateTuning = report.parameterTuning?.loops.rate
+    if (rateTuning) {
+      rateTuning.displayParameters = [
+        buildRecommendation(),
+        buildRecommendation({
+          axis: 'pitch',
+          axes: ['pitch'],
+          parameter: 'MC_PITCHRATE_P',
+          currentValue: 0.16,
+          targetValue: 0.152,
+        }),
+        buildRecommendation({
+          axis: 'yaw',
+          axes: ['yaw'],
+          parameter: 'MC_YAWRATE_P',
+          currentValue: 0.2,
+          targetValue: 0.19,
+        }),
+      ]
+    }
+
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={report}
+        isLoading={false}
+        errorText=""
+      />,
+    )
+
+    expect(html).toContain('MC_ROLLRATE_P')
+    expect(html).not.toContain('MC_PITCHRATE_P')
+    expect(html).not.toContain('MC_YAWRATE_P')
+  })
+
+  it('keeps shared velocity PID recommendations visible for the displayed vx axis', () => {
+    const report = buildReport([])
+    report.loops.velocity = {
+      status: 'available',
+      axis: {
+        vx: { status: 'available', unit: 'm/s', metrics: {} },
+        vy: { status: 'available', unit: 'm/s', metrics: {} },
+        vz: { status: 'available', unit: 'm/s', metrics: {} },
+      },
+      charts: [],
+    }
+    const velocityTuning = report.parameterTuning?.loops.velocity
+    if (velocityTuning) {
+      velocityTuning.displayParameters = [
+        buildRecommendation({
+          loop: 'velocity',
+          axis: 'vx/vy',
+          axes: ['vx', 'vy'],
+          parameter: 'MPC_XY_VEL_P_ACC',
+          currentValue: 4,
+          targetValue: 3.8,
+        }),
+        buildRecommendation({
+          loop: 'velocity',
+          axis: 'vz',
+          axes: ['vz'],
+          parameter: 'MPC_Z_VEL_P_ACC',
+          currentValue: 4,
+          targetValue: 3.8,
+        }),
+      ]
+    }
+
+    const html = renderToStaticMarkup(
+      <ControlQualityPanel
+        chartKeyPrefix="test"
+        report={report}
+        isLoading={false}
+        errorText=""
+      />,
+    )
+
+    expect(html).toContain('MPC_XY_VEL_P_ACC')
+    expect(html).not.toContain('MPC_Z_VEL_P_ACC')
   })
 
   it('renders executable recommendations and diagnostic guidance in one table', () => {
@@ -163,7 +277,6 @@ describe('ControlQualityPanel parameter recommendations', () => {
         report={report}
         isLoading={false}
         errorText=""
-        onApplyRange={() => {}}
       />,
     )
 
@@ -214,7 +327,6 @@ describe('ControlQualityPanel parameter recommendations', () => {
         report={report}
         isLoading={false}
         errorText=""
-        onApplyRange={() => {}}
       />,
     )
 
@@ -248,7 +360,6 @@ describe('ControlQualityPanel parameter recommendations', () => {
         report={report}
         isLoading={false}
         errorText=""
-        onApplyRange={() => {}}
       />,
     )
 
@@ -300,7 +411,6 @@ describe('ControlQualityPanel parameter recommendations', () => {
         report={report}
         isLoading={false}
         errorText=""
-        onApplyRange={() => {}}
       />,
     )
 
@@ -348,7 +458,6 @@ describe('ControlQualityPanel parameter recommendations', () => {
         report={report}
         isLoading={false}
         errorText=""
-        onApplyRange={() => {}}
       />,
     )
 
@@ -381,7 +490,6 @@ describe('ControlQualityPanel parameter recommendations', () => {
         report={report}
         isLoading={false}
         errorText=""
-        onApplyRange={() => {}}
       />,
     )
 
@@ -422,7 +530,6 @@ describe('ControlQualityPanel parameter recommendations', () => {
         report={report}
         isLoading={false}
         errorText=""
-        onApplyRange={() => {}}
       />,
     )
 
@@ -454,7 +561,6 @@ describe('ControlQualityPanel parameter recommendations', () => {
         report={report}
         isLoading={false}
         errorText=""
-        onApplyRange={() => {}}
       />,
     )
 

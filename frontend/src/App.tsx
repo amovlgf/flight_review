@@ -16,10 +16,7 @@ import type {
   ControlQualityParameterBound,
   ControlQualityReport,
 } from './types/log'
-import {
-  buildControlQualitySegment,
-  createControlQualityRequestTracker,
-} from './utils/controlQualityRequest'
+import { createControlQualityRequestTracker } from './utils/controlQualityRequest'
 import type { ControlQualityRequestTracker } from './utils/controlQualityRequest'
 import {
   buildChartSelectionControlSegment,
@@ -302,9 +299,7 @@ function App() {
         })),
       ])
 
-      setControlAnalysisStatusText(
-        `\u63a7\u5236\u73af\u5206\u6790\u5b8c\u6210\uff1a${result.successCount} \u4efd\u6210\u529f\uff0c${result.failedCount} \u4efd\u5931\u8d25\u3002`,
-      )
+      setControlAnalysisStatusText('')
     } catch {
       setControlAnalysisReports(
         nextItems.map((item) => ({
@@ -379,34 +374,6 @@ function App() {
       return false
     }
   }, [])
-
-  const handleApplyControlQualityRange = async (
-    item: ControlAnalysisReportItem,
-    startS: number | null,
-    endS: number | null,
-  ) => {
-    if (!item.logId) return
-    const segment = buildControlQualitySegment(startS, endS, 'manual')
-    setControlQualityVisibleRanges((current) => {
-      if (
-        typeof segment.startS !== 'number' ||
-        typeof segment.endS !== 'number'
-      ) {
-        const next = { ...current }
-        delete next[item.clientId]
-        return next
-      }
-
-      return {
-        ...current,
-        [item.clientId]: {
-          startS: segment.startS,
-          endS: segment.endS,
-        },
-      }
-    })
-    await loadControlQualityForItem(item.clientId, item.logId, segment)
-  }
 
   const handleControlQualityChartSelection = useCallback((
     rangeGroupKey: string | undefined,
@@ -1275,9 +1242,6 @@ function App() {
     <div className="app">
       <header className="header">
         <h1>{'\u98de\u884c\u65e5\u5fd7\u5206\u6790\u5e73\u53f0'}</h1>
-        <p>
-          {'选择功能后进入对应模块：飞行日志摘要、批量筛选日志、控制环路分析。'}
-        </p>
       </header>
       <input
         ref={controlAnalysisEntryFileInputRef}
@@ -1298,7 +1262,7 @@ function App() {
                 className="feature-card"
                 onClick={handleEnterFlightSummary}
               >
-                <h3>{'功能 1：飞行日志摘要'}</h3>
+                <h3>{'飞行日志摘要'}</h3>
                 <p>
                   {'上传单份 .ulg 日志，自动整理飞行阶段、飞行状态和简短报告。'}
                 </p>
@@ -1308,7 +1272,7 @@ function App() {
                 className="feature-card"
                 onClick={handleEnterBatchAnalysis}
               >
-                <h3>{'\u529f\u80fd 2\uff1a\u6279\u91cf\u4e0a\u4f20\u7b5b\u9009\u65e5\u5fd7'}</h3>
+                <h3>{'\u6279\u91cf\u4e0a\u4f20\u7b5b\u9009\u65e5\u5fd7'}</h3>
                 <p>
                   {'\u6279\u91cf\u4e0a\u4f20\u591a\u4efd\u65e5\u5fd7\uff0c\u7b5b\u9009\u89e3\u9501\u98de\u884c\u5e76\u6309\u65f6\u95f4\u6392\u5e8f\u3002'}
                 </p>
@@ -1318,7 +1282,7 @@ function App() {
                 className="feature-card"
                 onClick={handleRequestControlAnalysisLogs}
               >
-                <h3>{'\u529f\u80fd 3\uff1a\u63a7\u5236\u73af\u8def\u5206\u6790'}</h3>
+                <h3>{'\u63a7\u5236\u73af\u8def\u5206\u6790'}</h3>
                 <p>
                   {'\u6309\u6267\u884c\u5668\u3001\u89d2\u901f\u5ea6\u3001\u59ff\u6001\u3001\u901f\u5ea6\u3001\u4f4d\u7f6e\u73af\u987a\u5e8f\u5206\u6790\u63a7\u5236\u8ddf\u968f\u8d28\u91cf\u3002'}
                 </p>
@@ -1366,13 +1330,15 @@ function App() {
         {viewMode === 'control-analysis' ? (
           <section className="control-analysis-page">
             <div className="page-title-row">
-              <div>
-                <h2>{'\u529f\u80fd 3\uff1a\u63a7\u5236\u73af\u8def\u5206\u6790'}</h2>
-                <p className="hint">
-                  {'\u4ece\u5185\u73af\u5230\u5916\u73af\u5c55\u793a\u63a7\u5236\u8ddf\u968f\u66f2\u7ebf\u4e0e\u6307\u6807\uff1b\u652f\u6301\u591a\u65e5\u5fd7\u6309\u5217\u5bf9\u6bd4\u3002'}
-                </p>
-              </div>
+              <h2>{'\u63a7\u5236\u73af\u8def\u5206\u6790'}</h2>
               <div className="actions control-quality-page-actions">
+                <span
+                  className={`control-analysis-status control-analysis-status-${
+                    controlAnalysisHasReports ? 'done' : 'idle'
+                  }`}
+                >
+                  {controlAnalysisStatusLabel}
+                </span>
                 <button
                   type="button"
                   className={`button chart-sync-button${
@@ -1384,31 +1350,17 @@ function App() {
                   aria-pressed={isGlobalChartSyncEnabled}
                 >
                   {isGlobalChartSyncEnabled
-                    ? '\u5168\u5c40\u56fe\u8868\u8054\u52a8\uff1a\u5df2\u5f00\u542f'
-                    : '\u5f00\u542f\u5168\u5c40\u56fe\u8868\u8054\u52a8'}
+                    ? '\u8054\u52a8\u5df2\u5f00'
+                    : '\u56fe\u8868\u8054\u52a8'}
                 </button>
                 <button
                   type="button"
                   className="button"
                   onClick={handleBackToHome}
                 >
-                  {'\u8fd4\u56de\u529f\u80fd\u5217\u8868'}
+                  {'\u8fd4\u56de'}
                 </button>
               </div>
-            </div>
-            <div className="control-analysis-meta-row">
-              <p className="hint control-analysis-file-summary">
-                {controlAnalysisReports.length > 0
-                  ? controlAnalysisReports.map((item) => item.fileName).join('、')
-                  : '等待入口选择日志'}
-              </p>
-              <span
-                className={`control-analysis-status control-analysis-status-${
-                  controlAnalysisHasReports ? 'done' : 'idle'
-                }`}
-              >
-                {controlAnalysisStatusLabel}
-              </span>
             </div>
             {controlAnalysisStatusText ? (
               <p className="hint control-analysis-status-text">
@@ -1421,12 +1373,6 @@ function App() {
                   <article className="control-compare-column" key={item.clientId}>
                     <div className="control-compare-column-head">
                       <h3>{item.fileName}</h3>
-                      {item.logId ? (
-                        <details className="control-log-details">
-                          <summary>详情</summary>
-                          <p className="hint">{`logId: ${item.logId}`}</p>
-                        </details>
-                      ) : null}
                     </div>
                     <ControlQualityPanel
                       chartKeyPrefix={`control-quality__${item.clientId}`}
@@ -1445,13 +1391,6 @@ function App() {
                         setTimelineTime(timeValue)
                       }}
                       onToggleTimelinePlayback={toggleTimelinePlayback}
-                      onApplyRange={(startS, endS) =>
-                        handleApplyControlQualityRange(
-                          item,
-                          startS,
-                          endS,
-                        )
-                      }
                     />
                   </article>
                 ))}

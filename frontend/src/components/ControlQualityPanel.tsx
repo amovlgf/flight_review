@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
-import type { CSSProperties, FormEvent } from 'react'
+import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import ReactECharts from 'echarts-for-react'
 import ChartTimelineScrubber from './ChartTimelineScrubber'
@@ -34,7 +34,6 @@ type ControlQualityPanelProps = {
   onChartDispose?: (chartKey: string) => void
   onTimelineSeek?: (timeValue: number) => void
   onToggleTimelinePlayback?: () => void
-  onApplyRange: (startS: number | null, endS: number | null) => void
 }
 
 const LOOP_LABELS: Record<string, string> = {
@@ -43,14 +42,6 @@ const LOOP_LABELS: Record<string, string> = {
   attitude: '3. 姿态环',
   velocity: '4. 速度环',
   position: '5. 位置环',
-}
-
-const LOOP_SHORT_LABELS: Record<string, string> = {
-  actuator: '执行器输出',
-  rate: '角速度环',
-  attitude: '姿态环',
-  velocity: '速度环',
-  position: '位置环',
 }
 
 const AXIS_LABELS: Record<string, string> = {
@@ -79,15 +70,6 @@ const STATUS_LABELS: Record<string, string> = {
   medium: '中',
   high: '高',
 }
-
-const SOURCE_LABELS: Record<string, string> = {
-  auto_trim_5_percent: '自动排除前后 5%',
-  all_available_data: '全部可用数据',
-  manual: '手动区间',
-  auto: '自动区间',
-}
-
-SOURCE_LABELS.chart_selection = '\u6846\u9009\u5206\u6790\u533a\u95f4'
 
 const HINT_LABELS: Record<string, string> = {
   'Position tracking error is more prominent than velocity tracking. Review position setpoint smoothness and local position jumps.':
@@ -326,24 +308,12 @@ function formatStatus(value: string | null | undefined) {
   return STATUS_LABELS[value] || value
 }
 
-function formatLoopName(value: string) {
-  return LOOP_SHORT_LABELS[value] || value
-}
-
 function formatAxisName(value: string) {
   return AXIS_LABELS[value] || value
 }
 
-function formatSource(value: string) {
-  return SOURCE_LABELS[value] || value
-}
-
 function formatHint(value: string) {
   return HINT_LABELS[value] || value
-}
-
-function formatLoopList(values: string[]) {
-  return values.map(formatLoopName).join('、') || '-'
 }
 
 function formatMetric(value: unknown) {
@@ -363,6 +333,7 @@ function formatParameterValue(value: number | null | undefined) {
 
 function getTuningDisplayParameters(
   tuning: ControlQualityLoopParameterTuning | undefined,
+  selectedAxis?: string,
 ) {
   const displayParameters = tuning?.displayParameters ?? []
   const source = displayParameters.length > 0 ? displayParameters : tuning?.parameters ?? []
@@ -371,7 +342,9 @@ function getTuningDisplayParameters(
       item &&
       item.parameter &&
       item.targetable !== false &&
-      item.status !== 'display_only',
+      item.status !== 'display_only' &&
+      (!selectedAxis ||
+        (Array.isArray(item.axes) && item.axes.includes(selectedAxis))),
   )
 }
 
@@ -586,13 +559,6 @@ function formatParameterReason(item: ControlQualityParameterTuningItem) {
       nextAction,
     ].filter(Boolean)),
   ).join('；')
-}
-
-function formatRangeInputValue(value: unknown) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return ''
-  }
-  return Number(value.toFixed(3)).toString()
 }
 
 function getLoopAnchorId(chartKeyPrefix: string, loopName: string) {
@@ -970,14 +936,16 @@ function ParameterReasonTooltip({ reason }: { reason: string }) {
 
 function ParameterTuningSection({
   tuning,
+  selectedAxis,
 }: {
   tuning?: ControlQualityLoopParameterTuning
+  selectedAxis?: string
 }) {
   const blockers = tuning?.blockers?.filter(Boolean) ?? []
   const blockerSummary = blockers.length
     ? blockers.map((blocker) => formatTuningReason(blocker, 'blocked')).join('；')
     : ''
-  const parameters = getTuningDisplayParameters(tuning)
+  const parameters = getTuningDisplayParameters(tuning, selectedAxis)
   const hasAnyParameters = parameters.length > 0
 
   if (!tuning) {
@@ -1176,7 +1144,10 @@ function ControlLoopCard({
         </label>
       ) : null}
       {resolvedAxis ? <MetricsTable axis={resolvedAxis} /> : null}
-      <ParameterTuningSection tuning={parameterTuning} />
+      <ParameterTuningSection
+        tuning={parameterTuning}
+        selectedAxis={selectedAxis}
+      />
       {chart ? (
         <div
           id={getLoopAnchorId(chartKeyPrefix, loopName)}
@@ -1334,13 +1305,7 @@ function ControlQualityPanel({
   onChartDispose,
   onTimelineSeek,
   onToggleTimelinePlayback,
-  onApplyRange,
 }: ControlQualityPanelProps) {
-  const initialStart = report?.analysis_time_range.start_s ?? null
-  const initialEnd = report?.analysis_time_range.end_s ?? null
-  const initialStartValue = formatRangeInputValue(initialStart)
-  const initialEndValue = formatRangeInputValue(initialEnd)
-  const rangeKey = `${initialStartValue}-${initialEndValue}`
   const visibleAnalysisRange = visibleRange
     ? {
         startS: visibleRange.startS,
@@ -1360,17 +1325,6 @@ function ControlQualityPanel({
 
   if (!report && !isLoading && !errorText) {
     return null
-  }
-
-  const handleApplyRange = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const formData = new FormData(event.currentTarget)
-    const start = Number(formData.get('startS'))
-    const end = Number(formData.get('endS'))
-    onApplyRange(
-      Number.isFinite(start) ? start : null,
-      Number.isFinite(end) ? end : null,
-    )
   }
 
   const handleControlFlowNodeClick = (loopName: LoopName) => {
@@ -1393,59 +1347,11 @@ function ControlQualityPanel({
 
   return (
     <section className="control-quality-panel">
-      <div className="page-title-row">
-        <div>
-          <h3>控制环质量</h3>
-          {report ? (
-            <p className="hint">
-              {`分析区间：${formatMetric(report.analysis_time_range.start_s)}s - ${formatMetric(report.analysis_time_range.end_s)}s / ${formatSource(report.analysis_time_range.source)}`}
-            </p>
-          ) : null}
-        </div>
-      </div>
-
-      <form
-        key={rangeKey}
-        className="control-quality-range"
-        onSubmit={handleApplyRange}
-      >
-        <label className="tuning-field">
-          <span className="tuning-subtitle">开始时间 (s)</span>
-          <input
-            name="startS"
-            className="input tuning-input control-quality-range-input"
-            defaultValue={initialStartValue}
-          />
-        </label>
-        <label className="tuning-field">
-          <span className="tuning-subtitle">结束时间 (s)</span>
-          <input
-            name="endS"
-            className="input tuning-input control-quality-range-input"
-            defaultValue={initialEndValue}
-          />
-        </label>
-        <button className="button control-quality-refresh-button" type="submit">
-          <span className="control-quality-refresh-icon" aria-hidden="true">↻</span>
-          <span>重新计算</span>
-        </button>
-      </form>
-
       {isLoading ? <p className="hint">正在计算控制环指标...</p> : null}
       {errorText ? <p className="hint control-quality-error">{errorText}</p> : null}
 
       {report ? (
         <>
-          <div className="control-quality-summary">
-            <div>
-              <strong>可分析环路</strong>
-              <p>{formatLoopList(report.summary.available_loops)}</p>
-            </div>
-            <div>
-              <strong>不可用环路</strong>
-              <p>{formatLoopList(report.summary.unavailable_loops)}</p>
-            </div>
-          </div>
           <ul className="control-quality-hints">
             {report.summary.main_hints.map((hint) => (
               <li key={hint}>{formatHint(hint)}</li>

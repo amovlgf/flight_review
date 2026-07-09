@@ -429,42 +429,24 @@
   color: #047857;
 }
 
-.control-analysis-status-text {
-  margin: 6px 0 10px;
-}
-
 .control-analysis-page {
   display: grid;
-  gap: 14px;
-  border: 1px solid #d8dee9;
-  border-radius: 8px;
-  padding: 22px;
+  gap: 12px;
+  padding: 0;
   text-align: left;
-  background: #ffffff;
+  background: transparent;
 }
 
 .control-analysis-page h2 {
-  margin-top: 0;
-  margin-bottom: 8px;
-}
-
-.control-analysis-meta-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-top: 1px solid #e2e8f0;
-  border-bottom: 1px solid #e2e8f0;
-  padding: 12px 0;
-  flex-wrap: wrap;
-}
-
-.control-analysis-file-summary {
   margin: 0;
-  overflow-wrap: anywhere;
+}
+
+.control-analysis-status-text {
+  margin: 0 0 4px;
 }
 
 .control-quality-page-actions {
+  align-items: center;
   justify-content: flex-end;
   margin-bottom: 0;
 }
@@ -478,70 +460,6 @@
   border-color: #2563eb;
   background: #dbeafe;
   color: #1d4ed8;
-}
-
-.control-quality-range {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: end;
-}
-
-.control-quality-range .tuning-field {
-  flex: 1 1 188px;
-  min-width: 172px;
-}
-
-.control-quality-range-input {
-  width: 100%;
-  min-width: 0;
-}
-
-.control-quality-refresh-button {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-height: 34px;
-  margin-bottom: 0;
-  border-color: #1d4ed8;
-  border-radius: 999px;
-  padding: 7px 12px;
-  background: #2563eb;
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1;
-  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.22);
-}
-
-.control-quality-refresh-button:hover {
-  border-color: #1e40af;
-  background: #1d4ed8;
-}
-
-.control-quality-refresh-icon {
-  font-size: 14px;
-  line-height: 1;
-}
-
-.control-quality-summary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.control-quality-summary > div {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: #ffffff;
-}
-
-.control-quality-summary p {
-  margin: 6px 0 0;
-  color: #475569;
 }
 
 .control-quality-hints {
@@ -965,21 +883,6 @@
   overflow-wrap: anywhere;
 }
 
-.control-log-details {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.control-log-details summary {
-  cursor: pointer;
-  user-select: none;
-}
-
-.control-log-details .hint {
-  margin: 4px 0 0;
-  overflow-wrap: anywhere;
-}
-
 .control-compare-column .control-quality-panel {
   margin: 0;
 }
@@ -999,13 +902,6 @@
   border-top: 1px solid #e2e8f0;
   border-radius: 0;
   padding: 14px 0 0;
-  background: transparent;
-}
-
-.control-analysis-page .control-quality-summary > div {
-  border: 0;
-  border-radius: 0;
-  padding: 0;
   background: transparent;
 }
 
@@ -1635,8 +1531,6 @@
   .tuning-grid-compact,
   .tuning-bounds-row,
   .tuning-metrics-row,
-  .control-quality-range,
-  .control-quality-summary,
   .flight-summary-grid,
   .flight-summary-grid-compact,
   .flight-summary-section-head {
